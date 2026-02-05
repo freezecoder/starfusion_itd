@@ -445,22 +445,95 @@ def process_single_gene(exons_df, junctions_df, gene_name):
     """
     print(f"Analyzing fusions for gene: {gene_name}", file=sys.stderr)
     
-    # Pre-build exon lookup structures for common chromosomes/strands
-    # This avoids repeated DataFrame filtering
+    # Pre-build exon lookup structures for chromosomes/strands that have exons for this gene
+    # This avoids repeated DataFrame filtering and ensures we only process relevant junctions
     exon_lookups = {}  # (chromosome, strand) -> (exons_list, gene_start, gene_end)
     
-    # Get unique chromosome/strand combinations from junctions
-    unique_chrom_strands = set()
-    if len(junctions_df) > 0:
-        for chrom, strand in zip(junctions_df['chrom1'], junctions_df['strand1']):
-            unique_chrom_strands.add((chrom, strand))
-        for chrom, strand in zip(junctions_df['chrom2'], junctions_df['strand2']):
-            unique_chrom_strands.add((chrom, strand))
+    # Get unique chromosome/strand combinations that actually have exons for this gene
+    gene_chrom_strands = set()
+    for _, exon_row in exons_df.iterrows():
+        gene_chrom_strands.add((exon_row['chromosome'], exon_row['strand']))
     
-    # Build lookups for each chromosome/strand combination
-    for chrom, strand in unique_chrom_strands:
+    # Also get chromosome/strand combinations from junctions on gene chromosomes
+    # This ensures we build lookups for all combinations we might encounter
+    gene_chromosomes = set(exons_df['chromosome'].unique())
+    if len(junctions_df) > 0:
+        # Get chromosome/strand combinations from junctions on gene chromosomes
+        junctions_on_gene_chrom = junctions_df[junctions_df['chrom1'].isin(gene_chromosomes) | 
+                                                  junctions_df['chrom2'].isin(gene_chromosomes)]
+        if len(junctions_on_gene_chrom) > 0:
+            for chrom, strand in zip(junctions_on_gene_chrom['chrom1'], junctions_on_gene_chrom['strand1']):
+                if chrom in gene_chromosomes:
+                    gene_chrom_strands.add((chrom, strand))
+            for chrom, strand in zip(junctions_on_gene_chrom['chrom2'], junctions_on_gene_chrom['strand2']):
+                if chrom in gene_chromosomes:
+                    gene_chrom_strands.add((chrom, strand))
+    
+    # Build lookups for all chromosome/strand combinations we might encounter
+    for chrom, strand in gene_chrom_strands:
         exons_list, gene_start, gene_end = build_exon_lookup(exons_df, chrom, strand)
-        exon_lookups[(chrom, strand)] = (exons_list, gene_start, gene_end)
+        # Only store if we found exons (non-empty list)
+        if exons_list:
+            exon_lookups[(chrom, strand)] = (exons_list, gene_start, gene_end)
+    
+    # Early filter: only process junctions where both breakpoints could potentially match this gene
+    # This significantly speeds up processing for large files with many chromosomes
+    if len(exon_lookups) == 0:
+        print(f"  No exons found for {gene_name} - skipping.", file=sys.stderr)
+        return None, None
+    
+    # Filter junctions to only those on chromosomes/strands that have exons for this gene
+    # This is a major performance optimization for large files
+    valid_chrom_strands = set(exon_lookups.keys())
+    original_junction_count = len(junctions_df)
+    
+    if len(junctions_df) > 0:
+        # Get chromosomes and strands that have exons for this gene
+        gene_chromosomes = set(exons_df['chromosome'].unique())
+        gene_strands = set(exons_df['strand'].unique())
+        
+        print(f"  Processing {original_junction_count} total junctions", file=sys.stderr)
+        print(f"  Gene {gene_name} is on chromosomes: {', '.join(sorted(gene_chromosomes))}", file=sys.stderr)
+        print(f"  Gene {gene_name} has exons on strands: {', '.join(sorted(gene_strands))}", file=sys.stderr)
+        
+        # Filter: keep only intra-chromosomal junctions on chromosomes that have exons for this gene
+        intra_chrom = junctions_df['chrom1'] == junctions_df['chrom2']
+        chrom_match = junctions_df['chrom1'].isin(gene_chromosomes)
+        initial_filter = intra_chrom & chrom_match
+        
+        if initial_filter.sum() == 0:
+            unique_chr1 = junctions_df['chrom1'].unique()[:10]  # Show first 10
+            unique_chr2 = junctions_df['chrom2'].unique()[:10]
+            print(f"  No junctions on {gene_name} chromosomes.", file=sys.stderr)
+            print(f"  Sample chromosomes in junctions - chr1: {list(unique_chr1)}, chr2: {list(unique_chr2)}", file=sys.stderr)
+            return None, None
+        
+        junctions_df = junctions_df[initial_filter].copy().reset_index(drop=True)
+        print(f"  After chromosome filter: {len(junctions_df)} junctions (from {original_junction_count} total)", file=sys.stderr)
+        
+        # Second filter: check chromosome/strand combinations more precisely
+        # This filters out junctions where the strand doesn't match any exon strand for that chromosome
+        valid_chrom_strands = set(exon_lookups.keys())
+        chrom1_strand1_tuples = list(zip(junctions_df['chrom1'], junctions_df['strand1']))
+        chrom2_strand2_tuples = list(zip(junctions_df['chrom2'], junctions_df['strand2']))
+        
+        # Check if both breakpoints have valid chromosome/strand combinations
+        chrom1_strand1_match = [tup in valid_chrom_strands for tup in chrom1_strand1_tuples]
+        chrom2_strand2_match = [tup in valid_chrom_strands for tup in chrom2_strand2_tuples]
+        
+        # Keep only junctions where both breakpoints could match
+        final_mask = [m1 and m2 for m1, m2 in zip(chrom1_strand1_match, chrom2_strand2_match)]
+        junctions_df = junctions_df[final_mask].copy().reset_index(drop=True)
+        
+        if len(junctions_df) == 0:
+            print(f"  No junctions match {gene_name} chromosome/strand combinations after filtering.", file=sys.stderr)
+            print(f"  Valid chromosome/strand combinations for {gene_name}: {valid_chrom_strands}", file=sys.stderr)
+            if len(chrom1_strand1_tuples) > 0:
+                sample_tuples = set(chrom1_strand1_tuples[:20]) | set(chrom2_strand2_tuples[:20])
+                print(f"  Sample chromosome/strand combinations in junctions: {sorted(sample_tuples)[:10]}", file=sys.stderr)
+            return None, None
+        
+        print(f"  Filtered to {len(junctions_df)} junctions potentially matching {gene_name}", file=sys.stderr)
     
     # Store results
     results = []
@@ -559,11 +632,16 @@ def process_single_gene(exons_df, junctions_df, gene_name):
         lookup_key1 = (chrom1, strand1)
         lookup_key2 = (chrom2, strand2)
         
+        # Check if lookups exist and have exons
         if lookup_key1 not in exon_lookups or lookup_key2 not in exon_lookups:
             continue
         
         exons_list1, gene_start1, gene_end1 = exon_lookups[lookup_key1]
         exons_list2, gene_start2, gene_end2 = exon_lookups[lookup_key2]
+        
+        # Double-check that we have exons (shouldn't happen after filtering, but safety check)
+        if not exons_list1 or not exons_list2:
+            continue
         
         # Find location for both breakpoints using fast lookup
         loc1, dist1, is_within1 = find_exon_for_position_fast(bp1_pos, exons_list1, gene_start1, gene_end1)
