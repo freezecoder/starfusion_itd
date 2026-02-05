@@ -976,7 +976,8 @@ def process_single_gene(exons_df, junctions_df, gene_name):
     return summary_output_df, detail_df
 
 
-def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions_itd'):
+def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions_itd', 
+                                output_format='tsv', min_reads=10):
     """
     Identify intra-gene fusions with non-continuous exon breakpoints.
     Processes multiple genes if present in the exon file.
@@ -985,7 +986,9 @@ def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions
         exons_file: Path to exons TSV file (can contain multiple genes)
         junctions_file: Path to chimeric junctions TSV file
         output_base: Base name for output files (default: 'fusions_itd')
-                    Creates: {output_base}.summary.tsv and {output_base}.detail.tsv
+                    Creates: {output_base}.summary.{ext} and {output_base}.detail.{ext}
+        output_format: Output format - 'tsv' or 'csv' (default: 'tsv')
+        min_reads: Minimum number of supporting reads required (default: 10)
     """
     # Load data
     print("Loading exon information...", file=sys.stderr)
@@ -1031,16 +1034,69 @@ def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions
         ]
         empty_summary = pd.DataFrame(columns=summary_columns)
         empty_detail = pd.DataFrame(columns=detail_columns)
-        summary_file = f"{output_base}.summary.tsv"
-        detail_file = f"{output_base}.detail.tsv"
-        empty_summary.to_csv(summary_file, sep='\t', index=False)
-        empty_detail.to_csv(detail_file, sep='\t', index=False)
+        
+        # Determine separator and file extension based on format
+        if output_format.lower() == 'csv':
+            sep = ','
+            ext = 'csv'
+        else:  # default to tsv
+            sep = '\t'
+            ext = 'tsv'
+        
+        summary_file = f"{output_base}.summary.{ext}"
+        detail_file = f"{output_base}.detail.{ext}"
+        empty_summary.to_csv(summary_file, sep=sep, index=False)
+        empty_detail.to_csv(detail_file, sep=sep, index=False)
         print(f"\nEmpty output files created: {summary_file}, {detail_file}", file=sys.stderr)
         return
     
     # Concatenate all results
     combined_summary = pd.concat(all_summary_dfs, ignore_index=True)
     combined_detail = pd.concat(all_detail_dfs, ignore_index=True)
+    
+    # Filter by minimum supporting reads
+    total_before_filter = len(combined_summary)
+    combined_summary = combined_summary[combined_summary['supporting_reads'] >= min_reads].copy()
+    combined_detail = combined_detail[combined_detail['supporting_reads'] >= min_reads].copy()
+    filtered_out = total_before_filter - len(combined_summary)
+    
+    # Log filtering statistics
+    print(f"\nFiltering by minimum supporting reads (min_reads={min_reads}):", file=sys.stderr)
+    print(f"  Total fusion events before filtering: {total_before_filter}", file=sys.stderr)
+    print(f"  Events filtered out (< {min_reads} reads): {filtered_out}", file=sys.stderr)
+    print(f"  Events remaining after filtering: {len(combined_summary)}", file=sys.stderr)
+    
+    # If all events were filtered out, create empty files
+    if len(combined_summary) == 0:
+        print("\nNo fusion events remain after filtering.", file=sys.stderr)
+        # Determine separator and file extension based on format
+        if output_format.lower() == 'csv':
+            sep = ','
+            ext = 'csv'
+        else:  # default to tsv
+            sep = '\t'
+            ext = 'tsv'
+        
+        # Create empty files with headers
+        summary_columns = [
+            'gene', 'supporting_reads', 'left_location_anno', 'right_location_anno',
+            'left_breakpoint_aggregated', 'right_breakpoint_aggregated',
+            'left_strand', 'right_strand'
+        ]
+        detail_columns = [
+            'gene', 'supporting_reads', 'left_location_anno', 'right_location_anno',
+            'left_breakpoint_aggregated', 'right_breakpoint_aggregated',
+            'left_strand', 'right_strand', 'breakpoint1_positions', 'breakpoint2_positions',
+            'breakpoint1_read_ids', 'breakpoint2_read_ids'
+        ]
+        empty_summary = pd.DataFrame(columns=summary_columns)
+        empty_detail = pd.DataFrame(columns=detail_columns)
+        summary_file = f"{output_base}.summary.{ext}"
+        detail_file = f"{output_base}.detail.{ext}"
+        empty_summary.to_csv(summary_file, sep=sep, index=False)
+        empty_detail.to_csv(detail_file, sep=sep, index=False)
+        print(f"\nEmpty output files created: {summary_file}, {detail_file}", file=sys.stderr)
+        return combined_summary, combined_detail
     
     # Sort by gene, then by exon numbers (if available)
     # Check if sorting columns exist
@@ -1059,17 +1115,25 @@ def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions
         ascending=[True] * len(sort_cols)
     )
     
-    # Write output files
-    summary_file = f"{output_base}.summary.tsv"
-    detail_file = f"{output_base}.detail.tsv"
+    # Determine separator and file extension based on format
+    if output_format.lower() == 'csv':
+        sep = ','
+        ext = 'csv'
+    else:  # default to tsv
+        sep = '\t'
+        ext = 'tsv'
     
-    combined_summary.to_csv(summary_file, sep='\t', index=False)
-    combined_detail.to_csv(detail_file, sep='\t', index=False)
+    # Write output files
+    summary_file = f"{output_base}.summary.{ext}"
+    detail_file = f"{output_base}.detail.{ext}"
+    
+    combined_summary.to_csv(summary_file, sep=sep, index=False)
+    combined_detail.to_csv(detail_file, sep=sep, index=False)
     
     print(f"\nResults written to:", file=sys.stderr)
     print(f"  Summary (without read alignment details): {summary_file}", file=sys.stderr)
     print(f"  Detail (with all columns): {detail_file}", file=sys.stderr)
-    print(f"\nTotal fusions found: {len(combined_summary)} unique fusion types", file=sys.stderr)
+    print(f"\nTotal fusions found: {len(combined_summary)} unique fusion types (after filtering)", file=sys.stderr)
     
     return combined_summary, combined_detail
 
@@ -1090,8 +1154,20 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '-o', '--output',
-        help='Base name for output files (default: fusions_itd). Creates {base}.summary.tsv and {base}.detail.tsv',
+        help='Base name for output files (default: fusions_itd). Creates {base}.summary.{ext} and {base}.detail.{ext}',
         default='fusions_itd'
+    )
+    parser.add_argument(
+        '--format',
+        choices=['tsv', 'csv'],
+        default='tsv',
+        help='Output file format: tsv (tab-separated) or csv (comma-separated). Default: tsv'
+    )
+    parser.add_argument(
+        '--min-reads',
+        type=int,
+        default=10,
+        help='Minimum number of supporting reads required to report an ITD (default: 10)'
     )
     
     args = parser.parse_args()
@@ -1099,5 +1175,7 @@ if __name__ == '__main__':
     identify_intra_gene_fusions(
         args.exons_file,
         args.junctions_file,
-        args.output
+        args.output,
+        args.format,
+        args.min_reads
     )
