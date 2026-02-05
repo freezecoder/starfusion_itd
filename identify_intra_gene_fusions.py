@@ -13,8 +13,58 @@ from collections import defaultdict
 
 
 def load_exons(exon_file):
-    """Load exon information from TSV file."""
-    exons_df = pd.read_csv(exon_file, sep='\t')
+    """
+    Load exon information from TSV file.
+    Handles both files with and without headers.
+    
+    Expected columns (in order):
+    chromosome, start, end, gene, exon, strand
+    """
+    # Expected column names (used when file has no headers)
+    expected_columns = ['chromosome', 'start', 'end', 'gene', 'exon', 'strand']
+    
+    # Read first line to check if it looks like headers
+    with open(exon_file, 'r') as f:
+        first_line = f.readline().strip()
+        if not first_line:
+            raise ValueError(f"File {exon_file} appears to be empty")
+        first_values = [val.strip() for val in first_line.split('\t')]
+        
+        # Check if first value exactly matches expected header column names
+        # This is more reliable than checking for keywords
+        first_val_lower = first_values[0].lower() if len(first_values) > 0 else ''
+        looks_like_headers = first_val_lower in [col.lower() for col in expected_columns]
+        
+        # Check if first line looks like data
+        # Data would have: chromosome identifier (chr7, chr1, etc.) as first value
+        # and numeric values for start/end positions
+        looks_like_data = False
+        if len(first_values) >= 3:
+            # Check if first value is a chromosome identifier (chr followed by number or X/Y)
+            first_val = first_values[0].lower()
+            is_chr_id = (
+                first_val.startswith('chr') and 
+                len(first_val) > 3 and
+                (first_val[3:].isdigit() or first_val[3:] in ['x', 'y', 'm', 'mt'])
+            )
+            # Check if second and third values look like numeric coordinates
+            try:
+                int(first_values[1])
+                int(first_values[2])
+                looks_like_data = is_chr_id
+            except ValueError:
+                looks_like_data = False
+    
+    # Read file based on header detection
+    if looks_like_headers and not looks_like_data:
+        # File has headers - read with headers
+        exons_df = pd.read_csv(exon_file, sep='\t')
+        # Strip whitespace from column names
+        exons_df.columns = exons_df.columns.str.strip()
+    else:
+        # File doesn't have headers - read without headers and assign expected names
+        exons_df = pd.read_csv(exon_file, sep='\t', header=None, names=expected_columns)
+    
     return exons_df
 
 
