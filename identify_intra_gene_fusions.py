@@ -117,15 +117,38 @@ def load_chimeric_junctions(junction_file):
     return junctions_df
 
 
-def find_exon_for_position(position, exons_df, chromosome, strand, window=50, max_intron_dist=50000):
+def build_exon_lookup(exons_df, chromosome, strand):
     """
-    Find which exon or intron a genomic position falls into or near.
+    Build efficient lookup structures for exon matching.
+    
+    Returns:
+        Tuple of (exons_list, gene_start, gene_end) where exons_list is sorted by exon number
+    """
+    matching_exons = exons_df[
+        (exons_df['chromosome'] == chromosome) &
+        (exons_df['strand'] == strand)
+    ].copy()
+    
+    if len(matching_exons) == 0:
+        return [], None, None
+    
+    matching_exons = matching_exons.sort_values('exon')
+    exons_list = matching_exons[['exon', 'start', 'end']].values.tolist()
+    gene_start = matching_exons['start'].min()
+    gene_end = matching_exons['end'].max()
+    
+    return exons_list, gene_start, gene_end
+
+
+def find_exon_for_position_fast(position, exons_list, gene_start, gene_end, window=50, max_intron_dist=50000):
+    """
+    Fast version using pre-built lookup structure.
     
     Args:
         position: Genomic coordinate
-        exons_df: DataFrame with exon information
-        chromosome: Chromosome name
-        strand: Strand orientation
+        exons_list: List of [exon_num, start, end] tuples, sorted by exon number
+        gene_start: Minimum exon start position
+        gene_end: Maximum exon end position
         window: Window size for boundary matching (default: 50bp)
         max_intron_dist: Maximum distance from exon for intronic breakpoints (default: 50kb)
     
@@ -136,88 +159,59 @@ def find_exon_for_position(position, exons_df, chromosome, strand, window=50, ma
         - is_within: True if within exon, False if near
         Returns (None, None, None) if not found
     """
-    # Filter for matching chromosome and strand
-    matching_exons = exons_df[
-        (exons_df['chromosome'] == chromosome) &
-        (exons_df['strand'] == strand)
-    ].copy()
-    
-    if len(matching_exons) == 0:
+    if not exons_list or gene_start is None or gene_end is None:
         return None, None, None
     
-    # Sort exons by exon number
-    matching_exons = matching_exons.sort_values('exon')
-    
     # Check if position is within exon boundaries
-    within_exon = matching_exons[
-        (matching_exons['start'] <= position) &
-        (matching_exons['end'] >= position)
-    ]
-    
-    if len(within_exon) > 0:
-        exon_num = int(within_exon.iloc[0]['exon'])
-        return f"exon {exon_num}", 0, True
+    for exon_num, start, end in exons_list:
+        if start <= position <= end:
+            return f"exon {exon_num}", 0, True
     
     # Check if position is near exon boundaries (within window)
-    # Near start boundary
-    near_start = matching_exons[
-        (matching_exons['start'] - window <= position) &
-        (matching_exons['start'] + window >= position)
-    ]
-    
-    if len(near_start) > 0:
-        exon_num = int(near_start.iloc[0]['exon'])
-        dist = abs(position - near_start.iloc[0]['start'])
-        return f"exon {exon_num}", dist, False
-    
-    # Near end boundary
-    near_end = matching_exons[
-        (matching_exons['end'] - window <= position) &
-        (matching_exons['end'] + window >= position)
-    ]
-    
-    if len(near_end) > 0:
-        exon_num = int(near_end.iloc[0]['exon'])
-        dist = abs(position - near_end.iloc[0]['end'])
-        return f"exon {exon_num}", dist, False
+    for exon_num, start, end in exons_list:
+        # Near start boundary
+        if start - window <= position <= start + window:
+            dist = abs(position - start)
+            return f"exon {exon_num}", dist, False
+        # Near end boundary
+        if end - window <= position <= end + window:
+            dist = abs(position - end)
+            return f"exon {exon_num}", dist, False
     
     # Check if position is within or near gene span (between first and last exon)
-    gene_start = matching_exons['start'].min()
-    gene_end = matching_exons['end'].max()
     gene_span_buffer = 10000  # 10kb buffer around gene span
     
-    # Check if position is within gene span or within buffer
     if (gene_start - gene_span_buffer) <= position <= (gene_end + gene_span_buffer):
         # Find closest exon and determine if in intron
         distances = []
-        for _, exon_row in matching_exons.iterrows():
+        for exon_num, start, end in exons_list:
             # Distance to exon start
-            dist_to_start = abs(position - exon_row['start'])
+            dist_to_start = abs(position - start)
             # Distance to exon end
-            dist_to_end = abs(position - exon_row['end'])
+            dist_to_end = abs(position - end)
             # Distance to exon region (0 if within, else min distance to boundary)
-            if exon_row['start'] <= position <= exon_row['end']:
+            if start <= position <= end:
                 dist_to_exon = 0
             else:
                 dist_to_exon = min(dist_to_start, dist_to_end)
-            distances.append((dist_to_exon, int(exon_row['exon']), exon_row['start'], exon_row['end']))
+            distances.append((dist_to_exon, exon_num, start, end))
         
         if distances:
             min_dist, closest_exon, closest_start, closest_end = min(distances, key=lambda x: x[0])
             if min_dist <= max_intron_dist:
                 # Check if position is in an intron (between two exons)
                 # Intron N is between exon N and exon N+1
-                for i in range(len(matching_exons) - 1):
-                    exon_i = matching_exons.iloc[i]
-                    exon_i_plus_1 = matching_exons.iloc[i + 1]
+                for i in range(len(exons_list) - 1):
+                    exon_i_num, exon_i_start, exon_i_end = exons_list[i]
+                    exon_i_plus_1_num, exon_i_plus_1_start, exon_i_plus_1_end = exons_list[i + 1]
                     
                     # Check if position is between exon i and exon i+1
-                    if exon_i['end'] < position < exon_i_plus_1['start']:
+                    if exon_i_end < position < exon_i_plus_1_start:
                         # Position is in intron i (between exon i and exon i+1)
-                        intron_num = int(exon_i['exon'])
+                        intron_num = exon_i_num
                         # Calculate distance to nearest exon boundary
-                        dist_to_exon_i_end = position - exon_i['end']
-                        dist_to_exon_i_plus_1_start = exon_i_plus_1['start'] - position
+                        dist_to_exon_i_end = position - exon_i_end
+                        dist_to_exon_i_plus_1_start = exon_i_plus_1_start - position
                         min_intron_dist = min(dist_to_exon_i_end, dist_to_exon_i_plus_1_start)
                         return f"intron {intron_num}", min_intron_dist, False
                 
@@ -332,13 +326,10 @@ def create_summary_output(results_df, gene_name):
         # Count supporting reads
         supporting_reads = len(group)
         
-        # Collect positions with CIGARs for breakpoint1
+        # Collect positions with CIGARs for breakpoint1 (vectorized)
         # Format: position:CIGAR,position:CIGAR,...
-        bp1_pos_cigar_pairs = []
-        for _, row in group.iterrows():
-            pos = row['breakpoint1_coord']
-            cigar = row.get('breakpoint1_cigar', '')
-            bp1_pos_cigar_pairs.append(f"{pos}:{cigar}")
+        bp1_pos_cigar_pairs = (group['breakpoint1_coord'].astype(str) + ':' + 
+                               group['breakpoint1_cigar'].fillna('').astype(str)).tolist()
         # Remove duplicates while preserving order
         seen = set()
         bp1_pos_cigar_unique = []
@@ -348,12 +339,9 @@ def create_summary_output(results_df, gene_name):
                 bp1_pos_cigar_unique.append(item)
         bp1_positions_cigars_str = ','.join(bp1_pos_cigar_unique)
         
-        # Collect positions with CIGARs for breakpoint2
-        bp2_pos_cigar_pairs = []
-        for _, row in group.iterrows():
-            pos = row['breakpoint2_coord']
-            cigar = row.get('breakpoint2_cigar', '')
-            bp2_pos_cigar_pairs.append(f"{pos}:{cigar}")
+        # Collect positions with CIGARs for breakpoint2 (vectorized)
+        bp2_pos_cigar_pairs = (group['breakpoint2_coord'].astype(str) + ':' + 
+                               group['breakpoint2_cigar'].fillna('').astype(str)).tolist()
         # Remove duplicates while preserving order
         seen = set()
         bp2_pos_cigar_unique = []
@@ -425,35 +413,81 @@ def process_single_gene(exons_df, junctions_df, gene_name):
     """
     print(f"Analyzing fusions for gene: {gene_name}", file=sys.stderr)
     
+    # Pre-build exon lookup structures for common chromosomes/strands
+    # This avoids repeated DataFrame filtering
+    exon_lookups = {}  # (chromosome, strand) -> (exons_list, gene_start, gene_end)
+    
+    # Get unique chromosome/strand combinations from junctions
+    unique_chrom_strands = set()
+    if len(junctions_df) > 0:
+        for chrom, strand in zip(junctions_df['chrom1'], junctions_df['strand1']):
+            unique_chrom_strands.add((chrom, strand))
+        for chrom, strand in zip(junctions_df['chrom2'], junctions_df['strand2']):
+            unique_chrom_strands.add((chrom, strand))
+    
+    # Build lookups for each chromosome/strand combination
+    for chrom, strand in unique_chrom_strands:
+        exons_list, gene_start, gene_end = build_exon_lookup(exons_df, chrom, strand)
+        exon_lookups[(chrom, strand)] = (exons_list, gene_start, gene_end)
+    
     # Store results
     results = []
     
-    # Process each junction
-    for idx, row in junctions_df.iterrows():
-        chrom1 = row['chrom1']
-        coord1 = row['coord1']
-        strand1 = row['strand1']
-        chrom2 = row['chrom2']
-        coord2 = row['coord2']
-        strand2 = row['strand2']
-        read_name = row['read_name']
+    # Process each junction using itertuples (much faster than iterrows)
+    # Get column indices for faster access
+    col_names = junctions_df.columns.tolist()
+    chrom1_idx = col_names.index('chrom1')
+    coord1_idx = col_names.index('coord1')
+    strand1_idx = col_names.index('strand1')
+    chrom2_idx = col_names.index('chrom2')
+    coord2_idx = col_names.index('coord2')
+    strand2_idx = col_names.index('strand2')
+    read_name_idx = col_names.index('read_name')
+    
+    # Get optional column indices
+    bp1_pos_idx = col_names.index('breakpoint1_pos') if 'breakpoint1_pos' in col_names else None
+    bp2_pos_idx = col_names.index('breakpoint2_pos') if 'breakpoint2_pos' in col_names else None
+    cigar1_idx = col_names.index('CIGAR1') if 'CIGAR1' in col_names else None
+    cigar2_idx = col_names.index('CIGAR2') if 'CIGAR2' in col_names else None
+    junction_type_idx = col_names.index('junction_type') if 'junction_type' in col_names else None
+    
+    for row in junctions_df.itertuples(index=False):
+        chrom1 = row[chrom1_idx]
+        coord1 = row[coord1_idx]
+        strand1 = row[strand1_idx]
+        chrom2 = row[chrom2_idx]
+        coord2 = row[coord2_idx]
+        strand2 = row[strand2_idx]
+        read_name = row[read_name_idx]
         
         # Use breakpoint positions if available, otherwise use coord1/coord2
-        bp1_pos = row.get('breakpoint1_pos', coord1)
-        bp2_pos = row.get('breakpoint2_pos', coord2)
+        if bp1_pos_idx is not None:
+            bp1_pos = row[bp1_pos_idx]
+            if pd.isna(bp1_pos):
+                bp1_pos = coord1
+        else:
+            bp1_pos = coord1
+            
+        if bp2_pos_idx is not None:
+            bp2_pos = row[bp2_pos_idx]
+            if pd.isna(bp2_pos):
+                bp2_pos = coord2
+        else:
+            bp2_pos = coord2
         
         # Get CIGAR strings
-        cigar1 = row.get('CIGAR1', '')
-        cigar2 = row.get('CIGAR2', '')
-        
-        # Handle NaN values
-        if pd.isna(bp1_pos):
-            bp1_pos = coord1
-        if pd.isna(bp2_pos):
-            bp2_pos = coord2
-        if pd.isna(cigar1):
+        if cigar1_idx is not None:
+            cigar1 = row[cigar1_idx]
+            if pd.isna(cigar1):
+                cigar1 = ''
+        else:
             cigar1 = ''
-        if pd.isna(cigar2):
+            
+        if cigar2_idx is not None:
+            cigar2 = row[cigar2_idx]
+            if pd.isna(cigar2):
+                cigar2 = ''
+        else:
             cigar2 = ''
         
         # Convert to int
@@ -467,9 +501,19 @@ def process_single_gene(exons_df, junctions_df, gene_name):
         if chrom1 != chrom2:
             continue
         
-        # Find location for both breakpoints
-        loc1, dist1, is_within1 = find_exon_for_position(bp1_pos, exons_df, chrom1, strand1)
-        loc2, dist2, is_within2 = find_exon_for_position(bp2_pos, exons_df, chrom2, strand2)
+        # Get exon lookup for this chromosome/strand
+        lookup_key1 = (chrom1, strand1)
+        lookup_key2 = (chrom2, strand2)
+        
+        if lookup_key1 not in exon_lookups or lookup_key2 not in exon_lookups:
+            continue
+        
+        exons_list1, gene_start1, gene_end1 = exon_lookups[lookup_key1]
+        exons_list2, gene_start2, gene_end2 = exon_lookups[lookup_key2]
+        
+        # Find location for both breakpoints using fast lookup
+        loc1, dist1, is_within1 = find_exon_for_position_fast(bp1_pos, exons_list1, gene_start1, gene_end1)
+        loc2, dist2, is_within2 = find_exon_for_position_fast(bp2_pos, exons_list2, gene_start2, gene_end2)
         
         # Check if both breakpoints are in exons or introns
         if loc1 is None or loc2 is None:
@@ -543,7 +587,7 @@ def process_single_gene(exons_df, junctions_df, gene_name):
             'is_continuous': is_continuous,
             'fusion_type': fusion_type,
             'penalty_score': 0 if not is_continuous else 1,  # Penalty for continuous
-            'junction_type': row['junction_type'],
+            'junction_type': row[junction_type_idx] if junction_type_idx is not None else 0,
         }
         
         results.append(result)
