@@ -148,6 +148,42 @@ def load_chimeric_junctions(junction_file):
             na_values=['', 'NA', 'N/A', '.']
         )
     
+    # Validate that chrom1/chrom2 columns contain chromosome names, not strand values
+    # If they contain only '+' and '-', the columns are likely misaligned
+    if len(junctions_df) > 0:
+        if 'chrom1' in junctions_df.columns:
+            chrom1_sample = junctions_df['chrom1'].dropna().head(100).astype(str)
+            # Check if chrom1 contains only strand values (not chromosome names)
+            chrom1_is_strand = chrom1_sample.str.strip().isin(['+', '-']).sum() >= len(chrom1_sample) * 0.9
+            
+            if chrom1_is_strand:
+                print(f"  WARNING: 'chrom1' column appears to contain strand values instead of chromosomes.", file=sys.stderr)
+                print(f"  This suggests the file format differs from expected. Re-reading without headers...", file=sys.stderr)
+                
+                # Re-read the file without headers, assuming standard STAR format
+                junctions_df = pd.read_csv(
+                    junction_file,
+                    sep='\t',
+                    comment='#',
+                    header=None,
+                    low_memory=False,
+                    na_values=['', 'NA', 'N/A', '.']
+                )
+                
+                # Assign column names based on standard STAR Chimeric.out.junction format
+                # Standard STAR format (14 columns):
+                # 0: chrom1, 1: coord1, 2: strand1, 3: chrom2, 4: coord2, 5: strand2,
+                # 6: junction_type, 7: repeat_left, 8: repeat_right, 9: read_name,
+                # 10: breakpoint1_pos, 11: CIGAR1, 12: breakpoint2_pos, 13: CIGAR2
+                num_cols = junctions_df.shape[1]
+                if num_cols >= len(expected_columns):
+                    junctions_df.columns = expected_columns
+                else:
+                    # Use available columns
+                    junctions_df.columns = expected_columns[:num_cols]
+                
+                print(f"  Re-read file with {num_cols} columns using standard STAR format.", file=sys.stderr)
+    
     # Convert numeric columns explicitly (handles any remaining mixed types)
     # This approach avoids dtype warnings by converting after reading
     numeric_cols = ['coord1', 'coord2', 'junction_type', 'repeat_left', 'repeat_right', 
