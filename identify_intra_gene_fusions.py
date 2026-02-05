@@ -129,7 +129,7 @@ def load_chimeric_junctions(junction_file):
     # Read file based on header detection
     # Priority: if it looks like data (starts with chr or has numeric coordinates), treat as no headers
     # Skip comment lines starting with "#" (standard in STAR output files)
-    if looks_like_data or not looks_like_headers:
+    if looks_like_headers and not looks_like_data:
         # File has headers - read with headers
         junctions_df = pd.read_csv(
             junction_file, 
@@ -142,15 +142,44 @@ def load_chimeric_junctions(junction_file):
         junctions_df.columns = junctions_df.columns.str.strip()
     else:
         # File doesn't have headers - read without headers and assign expected names
+        # First read one row to check column count
+        junctions_df_temp = pd.read_csv(
+            junction_file, 
+            sep='\t', 
+            header=None, 
+            comment='#',  # Skip lines starting with "#"
+            nrows=1,  # Read just one row to check column count
+            low_memory=False
+        )
+        num_cols_actual = junctions_df_temp.shape[1]
+        
+        # Now read full file
         junctions_df = pd.read_csv(
             junction_file, 
             sep='\t', 
             header=None, 
             comment='#',  # Skip lines starting with "#"
-            names=expected_columns,
             low_memory=False,
             na_values=['', 'NA', 'N/A', '.']
         )
+        
+        # Assign column names - use expected columns up to actual column count
+        if num_cols_actual <= len(expected_columns):
+            junctions_df.columns = expected_columns[:num_cols_actual]
+        else:
+            # More columns than expected - assign expected names and number the rest
+            junctions_df.columns = expected_columns + [f'col_{i}' for i in range(len(expected_columns), num_cols_actual)]
+        
+        print(f"  Read file without headers: {num_cols_actual} columns detected, assigned column names: {list(junctions_df.columns[:min(6, num_cols_actual)])}...", file=sys.stderr)
+    
+    # Validate that required columns exist
+    required_cols = ['chrom1', 'chrom2', 'strand1', 'strand2']
+    missing_cols = [col for col in required_cols if col not in junctions_df.columns]
+    if missing_cols:
+        print(f"  ERROR: Missing required columns after reading file: {missing_cols}", file=sys.stderr)
+        print(f"  Available columns: {list(junctions_df.columns)}", file=sys.stderr)
+        print(f"  File appears to have {junctions_df.shape[1]} columns", file=sys.stderr)
+        raise ValueError(f"Missing required columns: {missing_cols}. Available columns: {list(junctions_df.columns)}")
     
     # Validate that chrom1/chrom2 columns contain chromosome names, not strand values
     # If they contain only '+' and '-', the columns are likely misaligned
@@ -525,6 +554,14 @@ def process_single_gene(exons_df, junctions_df, gene_name):
         Tuple of (summary_df, detail_df) or (None, None) if no fusions found
     """
     print(f"Analyzing fusions for gene: {gene_name}", file=sys.stderr)
+    
+    # Validate that required columns exist
+    required_cols = ['chrom1', 'chrom2', 'strand1', 'strand2']
+    missing_cols = [col for col in required_cols if col not in junctions_df.columns]
+    if missing_cols:
+        print(f"  ERROR: Missing required columns in junctions DataFrame: {missing_cols}", file=sys.stderr)
+        print(f"  Available columns: {list(junctions_df.columns)}", file=sys.stderr)
+        return None, None
     
     # Pre-build exon lookup structures for chromosomes/strands that have exons for this gene
     # This avoids repeated DataFrame filtering and ensures we only process relevant junctions
