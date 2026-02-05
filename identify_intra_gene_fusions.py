@@ -85,6 +85,17 @@ def load_chimeric_junctions(junction_file):
         'breakpoint1_pos', 'CIGAR1', 'breakpoint2_pos', 'CIGAR2'
     ]
     
+    # Define dtypes for numeric columns to avoid mixed type warnings
+    dtype_dict = {
+        'coord1': 'Int64',  # Nullable integer type
+        'coord2': 'Int64',
+        'junction_type': 'Int64',
+        'repeat_left': 'Int64',
+        'repeat_right': 'Int64',
+        'breakpoint1_pos': 'Int64',
+        'breakpoint2_pos': 'Int64',
+    }
+    
     # Read first line to check if it looks like headers
     with open(junction_file, 'r') as f:
         first_line = f.readline().strip()
@@ -104,15 +115,36 @@ def load_chimeric_junctions(junction_file):
             (first_values[0].startswith('chr') or first_values[0].startswith('Chr'))
         )
     
-    # Read file based on header detection
+    # Read file based on header detection (without specifying dtypes initially to avoid header parsing issues)
     if looks_like_headers and not looks_like_data:
         # File has headers - read with headers
-        junctions_df = pd.read_csv(junction_file, sep='\t')
+        junctions_df = pd.read_csv(
+            junction_file, 
+            sep='\t',
+            low_memory=False,  # Read entire file into memory to avoid dtype inference issues
+            na_values=['', 'NA', 'N/A', '.']  # Common NA representations
+        )
         # Strip whitespace from column names
         junctions_df.columns = junctions_df.columns.str.strip()
     else:
         # File doesn't have headers - read without headers and assign expected names
-        junctions_df = pd.read_csv(junction_file, sep='\t', header=None, names=expected_columns)
+        junctions_df = pd.read_csv(
+            junction_file, 
+            sep='\t', 
+            header=None, 
+            names=expected_columns,
+            low_memory=False,
+            na_values=['', 'NA', 'N/A', '.']
+        )
+    
+    # Convert numeric columns explicitly (handles any remaining mixed types)
+    # This approach avoids dtype warnings by converting after reading
+    numeric_cols = ['coord1', 'coord2', 'junction_type', 'repeat_left', 'repeat_right', 
+                    'breakpoint1_pos', 'breakpoint2_pos']
+    for col in numeric_cols:
+        if col in junctions_df.columns:
+            # Convert to numeric, coercing errors to NaN, then to nullable Int64
+            junctions_df[col] = pd.to_numeric(junctions_df[col], errors='coerce').astype('Int64')
     
     return junctions_df
 
@@ -453,49 +485,71 @@ def process_single_gene(exons_df, junctions_df, gene_name):
     
     for row in junctions_df.itertuples(index=False):
         chrom1 = row[chrom1_idx]
-        coord1 = row[coord1_idx]
+        coord1_raw = row[coord1_idx]
         strand1 = row[strand1_idx]
         chrom2 = row[chrom2_idx]
-        coord2 = row[coord2_idx]
+        coord2_raw = row[coord2_idx]
         strand2 = row[strand2_idx]
         read_name = row[read_name_idx]
         
-        # Use breakpoint positions if available, otherwise use coord1/coord2
+        # Get coord values (ensure they're integers)
+        try:
+            coord1_val = int(coord1_raw) if not pd.isna(coord1_raw) and coord1_raw is not None else None
+            coord2_val = int(coord2_raw) if not pd.isna(coord2_raw) and coord2_raw is not None else None
+        except (ValueError, TypeError):
+            continue
+        
+        # Skip if coordinates are invalid
+        if coord1_val is None or coord2_val is None:
+            continue
+        
+        # Use breakpoint positions if available, otherwise use coord1_val/coord2_val
         if bp1_pos_idx is not None:
-            bp1_pos = row[bp1_pos_idx]
-            if pd.isna(bp1_pos):
-                bp1_pos = coord1
+            bp1_pos_raw = row[bp1_pos_idx]
+            if pd.isna(bp1_pos_raw) or bp1_pos_raw is None:
+                bp1_pos = coord1_val
+            else:
+                try:
+                    bp1_pos = int(bp1_pos_raw)
+                except (ValueError, TypeError):
+                    bp1_pos = coord1_val
         else:
-            bp1_pos = coord1
+            bp1_pos = coord1_val
             
         if bp2_pos_idx is not None:
-            bp2_pos = row[bp2_pos_idx]
-            if pd.isna(bp2_pos):
-                bp2_pos = coord2
+            bp2_pos_raw = row[bp2_pos_idx]
+            if pd.isna(bp2_pos_raw) or bp2_pos_raw is None:
+                bp2_pos = coord2_val
+            else:
+                try:
+                    bp2_pos = int(bp2_pos_raw)
+                except (ValueError, TypeError):
+                    bp2_pos = coord2_val
         else:
-            bp2_pos = coord2
+            bp2_pos = coord2_val
+        
+        # Skip if we don't have valid positions
+        if bp1_pos is None or bp2_pos is None:
+            continue
         
         # Get CIGAR strings
         if cigar1_idx is not None:
             cigar1 = row[cigar1_idx]
-            if pd.isna(cigar1):
+            if pd.isna(cigar1) or cigar1 is None:
                 cigar1 = ''
+            else:
+                cigar1 = str(cigar1)
         else:
             cigar1 = ''
             
         if cigar2_idx is not None:
             cigar2 = row[cigar2_idx]
-            if pd.isna(cigar2):
+            if pd.isna(cigar2) or cigar2 is None:
                 cigar2 = ''
+            else:
+                cigar2 = str(cigar2)
         else:
             cigar2 = ''
-        
-        # Convert to int
-        try:
-            bp1_pos = int(bp1_pos)
-            bp2_pos = int(bp2_pos)
-        except (ValueError, TypeError):
-            continue
         
         # Check if both breakpoints are on the same chromosome (intra-chromosomal)
         if chrom1 != chrom2:
