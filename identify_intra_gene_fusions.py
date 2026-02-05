@@ -96,11 +96,19 @@ def load_chimeric_junctions(junction_file):
         'breakpoint2_pos': 'Int64',
     }
     
-    # Read first line to check if it looks like headers
+    # Read first non-comment line to check if it looks like headers
     with open(junction_file, 'r') as f:
-        first_line = f.readline().strip()
+        first_line = None
+        for line in f:
+            stripped_line = line.strip()
+            # Skip empty lines and comment lines starting with "#"
+            if stripped_line and not stripped_line.startswith('#'):
+                first_line = stripped_line
+                break
+        
         if not first_line:
-            raise ValueError(f"File {junction_file} appears to be empty")
+            raise ValueError(f"File {junction_file} appears to be empty or contains only comments")
+        
         first_values = [val.strip() for val in first_line.split('\t')]
         
         # Check if first line looks like headers
@@ -116,11 +124,13 @@ def load_chimeric_junctions(junction_file):
         )
     
     # Read file based on header detection (without specifying dtypes initially to avoid header parsing issues)
+    # Skip comment lines starting with "#" (standard in STAR output files)
     if looks_like_headers and not looks_like_data:
         # File has headers - read with headers
         junctions_df = pd.read_csv(
             junction_file, 
             sep='\t',
+            comment='#',  # Skip lines starting with "#"
             low_memory=False,  # Read entire file into memory to avoid dtype inference issues
             na_values=['', 'NA', 'N/A', '.']  # Common NA representations
         )
@@ -132,6 +142,7 @@ def load_chimeric_junctions(junction_file):
             junction_file, 
             sep='\t', 
             header=None, 
+            comment='#',  # Skip lines starting with "#"
             names=expected_columns,
             low_memory=False,
             na_values=['', 'NA', 'N/A', '.']
@@ -147,6 +158,22 @@ def load_chimeric_junctions(junction_file):
             junctions_df[col] = pd.to_numeric(junctions_df[col], errors='coerce').astype('Int64')
     
     return junctions_df
+
+
+def normalize_chromosome(chrom):
+    """
+    Normalize chromosome names to consistent format (chr7, chr1, etc.).
+    Handles various formats: chr7, 7, Chr7, CHR7 -> chr7
+    """
+    if pd.isna(chrom) or chrom is None:
+        return None
+    chrom_str = str(chrom).strip()
+    # Normalize chromosome names
+    if chrom_str.lower().startswith('chr'):
+        return chrom_str.lower()
+    elif chrom_str.isdigit() or chrom_str.upper() in ['X', 'Y', 'M', 'MT']:
+        return f"chr{chrom_str}"
+    return chrom_str.lower()
 
 
 def build_exon_lookup(exons_df, chromosome, strand):
@@ -447,39 +474,70 @@ def process_single_gene(exons_df, junctions_df, gene_name):
     
     # Pre-build exon lookup structures for chromosomes/strands that have exons for this gene
     # This avoids repeated DataFrame filtering and ensures we only process relevant junctions
-    exon_lookups = {}  # (chromosome, strand) -> (exons_list, gene_start, gene_end)
+    exon_lookups = {}  # (chromosome_normalized, strand) -> (exons_list, gene_start, gene_end)
     
-    # Get unique chromosome/strand combinations that actually have exons for this gene
+    # Normalize chromosomes in exons_df for consistent matching
+    exons_df_normalized = exons_df.copy()
+    exons_df_normalized['chromosome_norm'] = exons_df_normalized['chromosome'].apply(normalize_chromosome)
+    
+    # Get unique chromosome/strand combinations that actually have exons for this gene (normalized)
     gene_chrom_strands = set()
-    for _, exon_row in exons_df.iterrows():
-        gene_chrom_strands.add((exon_row['chromosome'], exon_row['strand']))
+    for _, exon_row in exons_df_normalized.iterrows():
+        chrom_norm = exon_row['chromosome_norm']
+        if chrom_norm is not None:
+            gene_chrom_strands.add((chrom_norm, exon_row['strand']))
     
     # Also get chromosome/strand combinations from junctions on gene chromosomes
     # This ensures we build lookups for all combinations we might encounter
-    gene_chromosomes = set(exons_df['chromosome'].unique())
+    gene_chromosomes_raw = set(exons_df['chromosome'].unique())
+    gene_chromosomes_norm = {normalize_chromosome(c) for c in gene_chromosomes_raw if normalize_chromosome(c) is not None}
+    
     if len(junctions_df) > 0:
+        # Normalize junction chromosomes
+        junctions_df['chrom1_norm'] = junctions_df['chrom1'].apply(normalize_chromosome)
+        junctions_df['chrom2_norm'] = junctions_df['chrom2'].apply(normalize_chromosome)
+        
         # Get chromosome/strand combinations from junctions on gene chromosomes
-        junctions_on_gene_chrom = junctions_df[junctions_df['chrom1'].isin(gene_chromosomes) | 
-                                                  junctions_df['chrom2'].isin(gene_chromosomes)]
+        junctions_on_gene_chrom = junctions_df[
+            junctions_df['chrom1_norm'].isin(gene_chromosomes_norm) | 
+            junctions_df['chrom2_norm'].isin(gene_chromosomes_norm)
+        ]
         if len(junctions_on_gene_chrom) > 0:
-            for chrom, strand in zip(junctions_on_gene_chrom['chrom1'], junctions_on_gene_chrom['strand1']):
-                if chrom in gene_chromosomes:
-                    gene_chrom_strands.add((chrom, strand))
-            for chrom, strand in zip(junctions_on_gene_chrom['chrom2'], junctions_on_gene_chrom['strand2']):
-                if chrom in gene_chromosomes:
-                    gene_chrom_strands.add((chrom, strand))
+            for chrom_norm, strand in zip(junctions_on_gene_chrom['chrom1_norm'], junctions_on_gene_chrom['strand1']):
+                if chrom_norm in gene_chromosomes_norm:
+                    gene_chrom_strands.add((chrom_norm, strand))
+            for chrom_norm, strand in zip(junctions_on_gene_chrom['chrom2_norm'], junctions_on_gene_chrom['strand2']):
+                if chrom_norm in gene_chromosomes_norm:
+                    gene_chrom_strands.add((chrom_norm, strand))
     
     # Build lookups for all chromosome/strand combinations we might encounter
-    for chrom, strand in gene_chrom_strands:
-        exons_list, gene_start, gene_end = build_exon_lookup(exons_df, chrom, strand)
-        # Only store if we found exons (non-empty list)
-        if exons_list:
-            exon_lookups[(chrom, strand)] = (exons_list, gene_start, gene_end)
+    # Use original chromosome values for lookup but normalized for key
+    for chrom_norm, strand in gene_chrom_strands:
+        # Find original chromosome value(s) that normalize to this
+        matching_exons = exons_df_normalized[
+            (exons_df_normalized['chromosome_norm'] == chrom_norm) &
+            (exons_df_normalized['strand'] == strand)
+        ]
+        if len(matching_exons) > 0:
+            # Use first matching original chromosome for lookup
+            orig_chrom = matching_exons.iloc[0]['chromosome']
+            exons_list, gene_start, gene_end = build_exon_lookup(exons_df, orig_chrom, strand)
+            # Only store if we found exons (non-empty list)
+            if exons_list:
+                exon_lookups[(chrom_norm, strand)] = (exons_list, gene_start, gene_end)
     
     # Early filter: only process junctions where both breakpoints could potentially match this gene
     # This significantly speeds up processing for large files with many chromosomes
     if len(exon_lookups) == 0:
         print(f"  No exons found for {gene_name} - skipping.", file=sys.stderr)
+        return None, None
+    
+    # Validate that required columns exist
+    required_cols = ['chrom1', 'chrom2', 'strand1', 'strand2']
+    missing_cols = [col for col in required_cols if col not in junctions_df.columns]
+    if missing_cols:
+        print(f"  ERROR: Missing required columns: {missing_cols}", file=sys.stderr)
+        print(f"  Available columns: {list(junctions_df.columns)}", file=sys.stderr)
         return None, None
     
     # Filter junctions to only those on chromosomes/strands that have exons for this gene
@@ -493,19 +551,61 @@ def process_single_gene(exons_df, junctions_df, gene_name):
         gene_strands = set(exons_df['strand'].unique())
         
         print(f"  Processing {original_junction_count} total junctions", file=sys.stderr)
-        print(f"  Gene {gene_name} is on chromosomes: {', '.join(sorted(gene_chromosomes))}", file=sys.stderr)
+        print(f"  Gene {gene_name} is on chromosomes (raw): {', '.join(sorted(gene_chromosomes))}", file=sys.stderr)
         print(f"  Gene {gene_name} has exons on strands: {', '.join(sorted(gene_strands))}", file=sys.stderr)
         
+        # Debug: Check what chromosomes we actually see in the data
+        if original_junction_count > 0:
+            sample_chr1 = junctions_df['chrom1'].dropna().unique()[:10]
+            sample_chr2 = junctions_df['chrom2'].dropna().unique()[:10]
+            print(f"  Sample chromosomes in junctions (raw) - chrom1: {list(sample_chr1)}, chrom2: {list(sample_chr2)}", file=sys.stderr)
+            
+            # Show normalized versions too
+            if 'chrom1_norm' in junctions_df.columns:
+                sample_chr1_norm = junctions_df['chrom1_norm'].dropna().unique()[:10]
+                sample_chr2_norm = junctions_df['chrom2_norm'].dropna().unique()[:10]
+                print(f"  Sample chromosomes in junctions (normalized) - chrom1: {list(sample_chr1_norm)}, chrom2: {list(sample_chr2_norm)}", file=sys.stderr)
+        
         # Filter: keep only intra-chromosomal junctions on chromosomes that have exons for this gene
-        intra_chrom = junctions_df['chrom1'] == junctions_df['chrom2']
-        chrom_match = junctions_df['chrom1'].isin(gene_chromosomes)
-        initial_filter = intra_chrom & chrom_match
+        # Normalize gene chromosomes for comparison
+        gene_chromosomes_norm = {normalize_chromosome(c) for c in gene_chromosomes}
+        gene_chromosomes_norm = {c for c in gene_chromosomes_norm if c is not None}
+        print(f"  Gene {gene_name} normalized chromosomes: {', '.join(sorted(gene_chromosomes_norm))}", file=sys.stderr)
+        
+        # Ensure normalized columns exist (they were created above)
+        if 'chrom1_norm' not in junctions_df.columns:
+            junctions_df['chrom1_norm'] = junctions_df['chrom1'].apply(normalize_chromosome)
+        if 'chrom2_norm' not in junctions_df.columns:
+            junctions_df['chrom2_norm'] = junctions_df['chrom2'].apply(normalize_chromosome)
+        
+        # Filter: intra-chromosomal and on gene chromosomes
+        intra_chrom = junctions_df['chrom1_norm'] == junctions_df['chrom2_norm']
+        chrom_match = junctions_df['chrom1_norm'].isin(gene_chromosomes_norm)
+        initial_filter = intra_chrom & chrom_match & junctions_df['chrom1_norm'].notna() & junctions_df['chrom2_norm'].notna()
         
         if initial_filter.sum() == 0:
-            unique_chr1 = junctions_df['chrom1'].unique()[:10]  # Show first 10
-            unique_chr2 = junctions_df['chrom2'].unique()[:10]
+            # Debug: Check what columns we actually have
             print(f"  No junctions on {gene_name} chromosomes.", file=sys.stderr)
-            print(f"  Sample chromosomes in junctions - chr1: {list(unique_chr1)}, chr2: {list(unique_chr2)}", file=sys.stderr)
+            print(f"  Available columns in junctions file: {list(junctions_df.columns)}", file=sys.stderr)
+            
+            # Check if chrom1/chrom2 columns exist and what they contain
+            if 'chrom1' in junctions_df.columns:
+                unique_chr1 = junctions_df['chrom1'].dropna().unique()[:20]
+                print(f"  Sample chrom1 values: {list(unique_chr1)}", file=sys.stderr)
+            else:
+                print(f"  WARNING: 'chrom1' column not found!", file=sys.stderr)
+                
+            if 'chrom2' in junctions_df.columns:
+                unique_chr2 = junctions_df['chrom2'].dropna().unique()[:20]
+                print(f"  Sample chrom2 values: {list(unique_chr2)}", file=sys.stderr)
+            else:
+                print(f"  WARNING: 'chrom2' column not found!", file=sys.stderr)
+            
+            # Check actual chromosome distribution
+            if 'chrom1' in junctions_df.columns:
+                chrom_counts = junctions_df['chrom1'].value_counts().head(10)
+                print(f"  Top 10 chromosomes in chrom1: {dict(chrom_counts)}", file=sys.stderr)
+            
             return None, None
         
         junctions_df = junctions_df[initial_filter].copy().reset_index(drop=True)
@@ -514,8 +614,9 @@ def process_single_gene(exons_df, junctions_df, gene_name):
         # Second filter: check chromosome/strand combinations more precisely
         # This filters out junctions where the strand doesn't match any exon strand for that chromosome
         valid_chrom_strands = set(exon_lookups.keys())
-        chrom1_strand1_tuples = list(zip(junctions_df['chrom1'], junctions_df['strand1']))
-        chrom2_strand2_tuples = list(zip(junctions_df['chrom2'], junctions_df['strand2']))
+        # Use normalized chromosomes for matching
+        chrom1_strand1_tuples = list(zip(junctions_df['chrom1_norm'], junctions_df['strand1']))
+        chrom2_strand2_tuples = list(zip(junctions_df['chrom2_norm'], junctions_df['strand2']))
         
         # Check if both breakpoints have valid chromosome/strand combinations
         chrom1_strand1_match = [tup in valid_chrom_strands for tup in chrom1_strand1_tuples]
@@ -625,12 +726,16 @@ def process_single_gene(exons_df, junctions_df, gene_name):
             cigar2 = ''
         
         # Check if both breakpoints are on the same chromosome (intra-chromosomal)
-        if chrom1 != chrom2:
+        # Normalize chromosomes for lookup
+        chrom1_norm = normalize_chromosome(chrom1)
+        chrom2_norm = normalize_chromosome(chrom2)
+        
+        if chrom1_norm != chrom2_norm or chrom1_norm is None or chrom2_norm is None:
             continue
         
-        # Get exon lookup for this chromosome/strand
-        lookup_key1 = (chrom1, strand1)
-        lookup_key2 = (chrom2, strand2)
+        # Get exon lookup for this chromosome/strand (using normalized chromosomes)
+        lookup_key1 = (chrom1_norm, strand1)
+        lookup_key2 = (chrom2_norm, strand2)
         
         # Check if lookups exist and have exons
         if lookup_key1 not in exon_lookups or lookup_key2 not in exon_lookups:
