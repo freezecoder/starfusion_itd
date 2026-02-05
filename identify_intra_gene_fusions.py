@@ -118,14 +118,18 @@ def load_chimeric_junctions(junction_file):
         looks_like_headers = any(keyword in first_line_lower for keyword in header_keywords)
         
         # Check if first line looks like data (starts with 'chr' followed by chromosome identifier)
+        # This takes priority - if it looks like data, treat as no headers
         looks_like_data = (
             len(first_values) > 0 and 
-            (first_values[0].startswith('chr') or first_values[0].startswith('Chr'))
+            (first_values[0].startswith('chr') or first_values[0].startswith('Chr') or 
+             first_values[0].startswith('chr') or first_values[0].isdigit() or
+             (len(first_values) > 1 and str(first_values[1]).isdigit()))  # Second column is numeric coordinate
         )
     
-    # Read file based on header detection (without specifying dtypes initially to avoid header parsing issues)
+    # Read file based on header detection
+    # Priority: if it looks like data (starts with chr or has numeric coordinates), treat as no headers
     # Skip comment lines starting with "#" (standard in STAR output files)
-    if looks_like_headers and not looks_like_data:
+    if looks_like_data or not looks_like_headers:
         # File has headers - read with headers
         junctions_df = pd.read_csv(
             junction_file, 
@@ -182,7 +186,21 @@ def load_chimeric_junctions(junction_file):
                     # Use available columns
                     junctions_df.columns = expected_columns[:num_cols]
                 
+                # Ensure chromosome and strand columns are strings (object dtype preserves strings and NaN)
+                string_cols = ['chrom1', 'chrom2', 'strand1', 'strand2', 'read_name', 'CIGAR1', 'CIGAR2']
+                for col in string_cols:
+                    if col in junctions_df.columns:
+                        junctions_df[col] = junctions_df[col].astype('object')
+                
                 print(f"  Re-read file with {num_cols} columns using standard STAR format.", file=sys.stderr)
+    
+    # Ensure chromosome and strand columns are strings (not converted to numeric)
+    # Keep as object dtype to preserve strings and allow NaN values
+    string_cols = ['chrom1', 'chrom2', 'strand1', 'strand2', 'read_name', 'CIGAR1', 'CIGAR2']
+    for col in string_cols:
+        if col in junctions_df.columns:
+            # Convert to object dtype (preserves strings and NaN)
+            junctions_df[col] = junctions_df[col].astype('object')
     
     # Convert numeric columns explicitly (handles any remaining mixed types)
     # This approach avoids dtype warnings by converting after reading
