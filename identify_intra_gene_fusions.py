@@ -465,6 +465,16 @@ def create_summary_output(results_df, gene_name):
         bp1_aggregated = f"{chromosome}:{bp1_agg_pos}"
         bp2_aggregated = f"{chromosome}:{bp2_agg_pos}"
         
+        # Calculate fusion position spans (min-max range for each breakpoint)
+        bp1_min_pos = min(bp1_positions_list)
+        bp1_max_pos = max(bp1_positions_list)
+        bp2_min_pos = min(bp2_positions_list)
+        bp2_max_pos = max(bp2_positions_list)
+        
+        # Format as chr:start-end
+        left_fusion_pos = f"{chromosome}:{bp1_min_pos}-{bp1_max_pos}"
+        right_fusion_pos = f"{chromosome}:{bp2_min_pos}-{bp2_max_pos}"
+        
         # Count supporting reads
         supporting_reads = len(group)
         
@@ -512,6 +522,8 @@ def create_summary_output(results_df, gene_name):
             'right_location_anno': right_location_anno,
             'left_breakpoint_aggregated': bp1_aggregated,
             'right_breakpoint_aggregated': bp2_aggregated,
+            'left_fusion_pos': left_fusion_pos,
+            'right_fusion_pos': right_fusion_pos,
             'left_strand': strand1,
             'right_strand': strand2,
             'breakpoint1_positions': bp1_positions_cigars_str,
@@ -522,6 +534,11 @@ def create_summary_output(results_df, gene_name):
             'exon_distance': exon_distance,
             'left_exon_num': exon1_num,  # For sorting
             'right_exon_num': exon2_num,  # For sorting
+            'chromosome': chromosome,  # For BEDPE output
+            'bp1_min': bp1_min_pos,  # For BEDPE output
+            'bp1_max': bp1_max_pos,  # For BEDPE output
+            'bp2_min': bp2_min_pos,  # For BEDPE output
+            'bp2_max': bp2_max_pos,  # For BEDPE output
         })
     
     summary_df = pd.DataFrame(summary_rows)
@@ -943,6 +960,8 @@ def process_single_gene(exons_df, junctions_df, gene_name):
         'right_location_anno',
         'left_breakpoint_aggregated',
         'right_breakpoint_aggregated',
+        'left_fusion_pos',
+        'right_fusion_pos',
         'left_strand',
         'right_strand',
         'breakpoint1_positions',
@@ -959,6 +978,8 @@ def process_single_gene(exons_df, junctions_df, gene_name):
         'right_location_anno',
         'left_breakpoint_aggregated',
         'right_breakpoint_aggregated',
+        'left_fusion_pos',
+        'right_fusion_pos',
         'left_strand',
         'right_strand'
     ]
@@ -973,7 +994,64 @@ def process_single_gene(exons_df, junctions_df, gene_name):
     detail_df = summary_df[detail_columns].copy()
     summary_output_df = summary_df[summary_columns].copy()
     
-    return summary_output_df, detail_df
+    # Return full summary_df (with all columns including BEDPE columns) and detail_df
+    # The caller will select columns as needed
+    return summary_df, detail_df
+
+
+def write_bedpe_file(summary_df, output_file):
+    """
+    Write fusion events to BEDPE format for genome browser visualization.
+    
+    BEDPE format: chr1  start1  end1  chr2  start2  end2  name  score  strand1  strand2
+    
+    Args:
+        summary_df: DataFrame with fusion summary data (must contain chromosome, bp1_min, bp1_max, bp2_min, bp2_max)
+        output_file: Path to output BEDPE file
+    """
+    if len(summary_df) == 0:
+        # Create empty BEDPE file with header comment
+        with open(output_file, 'w') as f:
+            f.write("#chr1\tstart1\tend1\tchr2\tstart2\tend2\tname\tscore\tstrand1\tstrand2\n")
+        return
+    
+    # Check for required columns
+    required_cols = ['chromosome', 'bp1_min', 'bp1_max', 'bp2_min', 'bp2_max', 'gene', 
+                     'left_location_anno', 'right_location_anno', 'supporting_reads', 
+                     'left_strand', 'right_strand']
+    missing_cols = [col for col in required_cols if col not in summary_df.columns]
+    if missing_cols:
+        print(f"  WARNING: Missing columns for BEDPE output: {missing_cols}", file=sys.stderr)
+        print(f"  Creating empty BEDPE file.", file=sys.stderr)
+        with open(output_file, 'w') as f:
+            f.write("#chr1\tstart1\tend1\tchr2\tstart2\tend2\tname\tscore\tstrand1\tstrand2\n")
+        return
+    
+    bedpe_rows = []
+    for idx, row in summary_df.iterrows():
+        # Create fusion name: gene_left_location_right_location
+        fusion_name = f"{row['gene']}_{row['left_location_anno'].replace(' ', '_')}_{row['right_location_anno'].replace(' ', '_')}"
+        # Clean up name (remove parentheses and special chars for BEDPE compatibility)
+        fusion_name = fusion_name.replace('(', '').replace(')', '').replace(',', '')
+        
+        bedpe_row = {
+            'chr1': row['chromosome'],
+            'start1': int(row['bp1_min']) - 1,  # BEDPE uses 0-based start
+            'end1': int(row['bp1_max']),  # BEDPE uses 1-based end (exclusive)
+            'chr2': row['chromosome'],
+            'start2': int(row['bp2_min']) - 1,  # BEDPE uses 0-based start
+            'end2': int(row['bp2_max']),  # BEDPE uses 1-based end (exclusive)
+            'name': fusion_name,
+            'score': int(row['supporting_reads']),
+            'strand1': row['left_strand'],
+            'strand2': row['right_strand']
+        }
+        bedpe_rows.append(bedpe_row)
+    
+    bedpe_df = pd.DataFrame(bedpe_rows)
+    
+    # Write BEDPE file (tab-separated, no header)
+    bedpe_df.to_csv(output_file, sep='\t', index=False, header=False)
 
 
 def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions_itd', 
@@ -1024,11 +1102,13 @@ def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions
         summary_columns = [
             'gene', 'supporting_reads', 'left_location_anno', 'right_location_anno',
             'left_breakpoint_aggregated', 'right_breakpoint_aggregated',
+            'left_fusion_pos', 'right_fusion_pos',
             'left_strand', 'right_strand'
         ]
         detail_columns = [
             'gene', 'supporting_reads', 'left_location_anno', 'right_location_anno',
             'left_breakpoint_aggregated', 'right_breakpoint_aggregated',
+            'left_fusion_pos', 'right_fusion_pos',
             'left_strand', 'right_strand', 'breakpoint1_positions', 'breakpoint2_positions',
             'breakpoint1_read_ids', 'breakpoint2_read_ids'
         ]
@@ -1045,9 +1125,11 @@ def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions
         
         summary_file = f"{output_base}.summary.{ext}"
         detail_file = f"{output_base}.detail.{ext}"
+        bedpe_file = f"{output_base}.bedpe"
         empty_summary.to_csv(summary_file, sep=sep, index=False)
         empty_detail.to_csv(detail_file, sep=sep, index=False)
-        print(f"\nEmpty output files created: {summary_file}, {detail_file}", file=sys.stderr)
+        write_bedpe_file(empty_summary, bedpe_file)
+        print(f"\nEmpty output files created: {summary_file}, {detail_file}, {bedpe_file}", file=sys.stderr)
         return
     
     # Concatenate all results
@@ -1081,11 +1163,13 @@ def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions
         summary_columns = [
             'gene', 'supporting_reads', 'left_location_anno', 'right_location_anno',
             'left_breakpoint_aggregated', 'right_breakpoint_aggregated',
+            'left_fusion_pos', 'right_fusion_pos',
             'left_strand', 'right_strand'
         ]
         detail_columns = [
             'gene', 'supporting_reads', 'left_location_anno', 'right_location_anno',
             'left_breakpoint_aggregated', 'right_breakpoint_aggregated',
+            'left_fusion_pos', 'right_fusion_pos',
             'left_strand', 'right_strand', 'breakpoint1_positions', 'breakpoint2_positions',
             'breakpoint1_read_ids', 'breakpoint2_read_ids'
         ]
@@ -1093,26 +1177,33 @@ def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions
         empty_detail = pd.DataFrame(columns=detail_columns)
         summary_file = f"{output_base}.summary.{ext}"
         detail_file = f"{output_base}.detail.{ext}"
+        bedpe_file = f"{output_base}.bedpe"
         empty_summary.to_csv(summary_file, sep=sep, index=False)
         empty_detail.to_csv(detail_file, sep=sep, index=False)
-        print(f"\nEmpty output files created: {summary_file}, {detail_file}", file=sys.stderr)
+        write_bedpe_file(empty_summary, bedpe_file)
+        print(f"\nEmpty output files created: {summary_file}, {detail_file}, {bedpe_file}", file=sys.stderr)
         return combined_summary, combined_detail
     
     # Sort by gene, then by exon numbers (if available)
-    # Check if sorting columns exist
+    # Check if sorting columns exist in both DataFrames
     sort_cols = ['gene']
-    if 'left_exon_num' in combined_summary.columns:
+    if 'left_exon_num' in combined_summary.columns and 'left_exon_num' in combined_detail.columns:
         sort_cols.extend(['left_exon_num', 'right_exon_num'])
     else:
+        # Use location columns that should be in both DataFrames
         sort_cols.extend(['left_location_anno', 'right_location_anno'])
     
+    # Filter sort_cols to only include columns that exist in each DataFrame
+    summary_sort_cols = [col for col in sort_cols if col in combined_summary.columns]
+    detail_sort_cols = [col for col in sort_cols if col in combined_detail.columns]
+    
     combined_summary = combined_summary.sort_values(
-        by=sort_cols,
-        ascending=[True] * len(sort_cols)
+        by=summary_sort_cols,
+        ascending=[True] * len(summary_sort_cols)
     )
     combined_detail = combined_detail.sort_values(
-        by=sort_cols,
-        ascending=[True] * len(sort_cols)
+        by=detail_sort_cols,
+        ascending=[True] * len(detail_sort_cols)
     )
     
     # Determine separator and file extension based on format
@@ -1123,16 +1214,40 @@ def identify_intra_gene_fusions(exons_file, junctions_file, output_base='fusions
         sep = '\t'
         ext = 'tsv'
     
+    # Define column lists for output
+    summary_output_columns = [
+        'gene', 'supporting_reads', 'left_location_anno', 'right_location_anno',
+        'left_breakpoint_aggregated', 'right_breakpoint_aggregated',
+        'left_fusion_pos', 'right_fusion_pos',
+        'left_strand', 'right_strand'
+    ]
+    detail_output_columns = [
+        'gene', 'supporting_reads', 'left_location_anno', 'right_location_anno',
+        'left_breakpoint_aggregated', 'right_breakpoint_aggregated',
+        'left_fusion_pos', 'right_fusion_pos',
+        'left_strand', 'right_strand', 'breakpoint1_positions', 'breakpoint2_positions',
+        'breakpoint1_read_ids', 'breakpoint2_read_ids'
+    ]
+    
+    # Select columns for output files
+    summary_output_df = combined_summary[[col for col in summary_output_columns if col in combined_summary.columns]].copy()
+    detail_output_df = combined_detail[[col for col in detail_output_columns if col in combined_detail.columns]].copy()
+    
     # Write output files
     summary_file = f"{output_base}.summary.{ext}"
     detail_file = f"{output_base}.detail.{ext}"
+    bedpe_file = f"{output_base}.bedpe"
     
-    combined_summary.to_csv(summary_file, sep=sep, index=False)
-    combined_detail.to_csv(detail_file, sep=sep, index=False)
+    summary_output_df.to_csv(summary_file, sep=sep, index=False)
+    detail_output_df.to_csv(detail_file, sep=sep, index=False)
+    
+    # Write BEDPE file (needs full combined_summary with chromosome and bp columns)
+    write_bedpe_file(combined_summary, bedpe_file)
     
     print(f"\nResults written to:", file=sys.stderr)
     print(f"  Summary (without read alignment details): {summary_file}", file=sys.stderr)
     print(f"  Detail (with all columns): {detail_file}", file=sys.stderr)
+    print(f"  BEDPE (for genome browser): {bedpe_file}", file=sys.stderr)
     print(f"\nTotal fusions found: {len(combined_summary)} unique fusion types (after filtering)", file=sys.stderr)
     
     return combined_summary, combined_detail

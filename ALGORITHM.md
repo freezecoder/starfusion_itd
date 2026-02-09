@@ -126,7 +126,20 @@ For each valid junction:
      - Example: exon21-exon18
      - These are **preferred** (`penalty_score = 0`)
 
-### Step 5: Aggregation and Summary
+### Step 5: Filtering by Minimum Supporting Reads
+
+After aggregation, fusion events are filtered based on the minimum number of supporting reads:
+
+- **Default threshold**: 10 reads (`--min-reads 10`)
+- **Filtering**: Only fusion events with `supporting_reads >= min_reads` are reported
+- **Logging**: The algorithm reports:
+  - Total fusion events before filtering
+  - Number of events filtered out
+  - Number of events remaining after filtering
+
+This filtering helps remove low-confidence fusion events that may be artifacts or sequencing errors.
+
+### Step 6: Aggregation and Summary
 
 Junctions are grouped by fusion type (exon1-exon2 combination), and for each group:
 
@@ -148,17 +161,32 @@ Junctions are grouped by fusion type (exon1-exon2 combination), and for each gro
 - All read IDs supporting each breakpoint are collected
 - Format: Comma-separated list
 
-#### 5.4 Output Columns
+#### 5.4 Fusion Position Spans
+
+For each breakpoint, the algorithm calculates the span of positions covered by all supporting reads:
+
+- **Left Fusion Position** (`left_fusion_pos`): Range from minimum to maximum breakpoint1 positions
+  - Format: `chr:min-max` (e.g., `chr7:55268971-55268981`)
+  - Represents the full span of the left breakpoint region
+  
+- **Right Fusion Position** (`right_fusion_pos`): Range from minimum to maximum breakpoint2 positions
+  - Format: `chr:min-max` (e.g., `chr7:55241613-55241614`)
+  - Represents the full span of the right breakpoint region
+
+These spans help visualize the uncertainty/range of breakpoint positions across supporting reads.
+
+#### 5.5 Output Columns
 
 The final output includes:
 
 1. `gene`: Gene name
 2. `supporting_reads`: Count of reads supporting this fusion
-3. `left_exon_anno`, `right_exon_anno`: Exon numbers involved
-4. `left_breakpoint_aggregated`, `right_breakpoint_aggregated`: Consensus breakpoint positions (chr:pos)
-5. `left_strand`, `right_strand`: Strand orientations
-6. `breakpoint1_positions`, `breakpoint2_positions`: All positions with CIGARs
-7. `breakpoint1_read_ids`, `breakpoint2_read_ids`: Supporting read IDs
+3. `left_location_anno`, `right_location_anno`: Exon/intron locations with distance indicators
+4. `left_breakpoint_aggregated`, `right_breakpoint_aggregated`: Consensus breakpoint positions (chr:pos, mode)
+5. `left_fusion_pos`, `right_fusion_pos`: Breakpoint position spans (chr:min-max)
+6. `left_strand`, `right_strand`: Strand orientations
+7. `breakpoint1_positions`, `breakpoint2_positions`: All positions with CIGARs (detail file only)
+8. `breakpoint1_read_ids`, `breakpoint2_read_ids`: Supporting read IDs (detail file only)
 
 ## Key Algorithm Characteristics
 
@@ -190,7 +218,35 @@ The final output includes:
 
 Results are sorted by:
 1. `penalty_score` (ascending): Non-continuous first
-2. `exon_distance` (descending): Larger exon distances first
+2. `left_exon_num`, `right_exon_num` (ascending): By exon numbers
+3. If exon numbers unavailable: `left_location_anno`, `right_location_anno`
+
+### Output Formats
+
+The algorithm generates three output files:
+
+#### Summary File (`{output_base}.summary.{ext}`)
+- Contains fusion events without read-level details
+- Columns: gene, supporting_reads, location annotations, aggregated breakpoints, fusion position spans, strands
+- Suitable for quick overview and analysis
+
+#### Detail File (`{output_base}.detail.{ext}`)
+- Contains all information including read-level details
+- Additional columns: breakpoint positions with CIGARs, read IDs
+- Suitable for detailed inspection and validation
+
+#### BEDPE File (`{output_base}.bedpe`)
+- Standard BEDPE format for genome browser visualization
+- Format: `chr1 start1 end1 chr2 start2 end2 name score strand1 strand2`
+- Uses 0-based start coordinates (BEDPE standard)
+- Fusion names: `gene_left_location_right_location`
+- Can be loaded into IGV, UCSC Genome Browser, or other genome browsers
+- Breakpoint spans represent the min-max range of positions from supporting reads
+
+#### File Format Options
+- **TSV** (default): Tab-separated values
+- **CSV**: Comma-separated values
+- Controlled by `--format` option
 
 ## Limitations and Notes
 
@@ -220,4 +276,10 @@ The algorithm:
 3. Assigns to exon21 and exon18 respectively
 4. Classifies as non-continuous (distance = 3)
 5. Aggregates with other reads supporting the same fusion
-6. Outputs: `chr7:55268981` and `chr7:55241614` as aggregated breakpoints
+6. Calculates aggregated breakpoints: `chr7:55268981` and `chr7:55241614` (mode positions)
+7. Calculates fusion spans: `chr7:55268971-55268981` and `chr7:55241613-55241614` (min-max range)
+8. Filters by minimum supporting reads (default: 10)
+9. Outputs to three files:
+   - Summary TSV/CSV: Fusion events without read details
+   - Detail TSV/CSV: Full information including read IDs and CIGARs
+   - BEDPE: Genome browser visualization format
