@@ -60,8 +60,8 @@ def main():
         gene = exons[0][3] if exons else "."
 
         for i in range(len(exons) - 1):
-            _, _, prev_end = exons[i]
-            _, next_start, _ = exons[i + 1]
+            _, _, prev_end, _ = exons[i]
+            _, next_start, _, _ = exons[i + 1]
             intron_start = prev_end
             intron_end = next_start
 
