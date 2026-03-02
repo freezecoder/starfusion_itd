@@ -2,11 +2,11 @@
 """
 Produce a BED file of introns from an exon BED input.
 
-Input format (tab-separated):
+Input format (tab- or space-separated):
   chrom, start, end, gene, exon_num, strand, transcript_id, [extra_field...]
 
 Introns are computed between consecutive exons within each transcript,
-ordered by exon number.
+ordered by genomic coordinate (handles both + and - strand correctly).
 """
 
 import argparse
@@ -40,7 +40,7 @@ def main():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            fields = line.split("\t")
+            fields = line.split()  # handles both tab and space
             if len(fields) < 7:
                 continue
             chrom = fields[0]
@@ -53,10 +53,10 @@ def main():
             key = (chrom, transcript_id, strand)
             groups[key].append((exon_num, start, end, gene))
 
-    # Sort exons by exon number within each group and compute introns
+    # Sort exons by genomic start within each group (works for both strands)
     introns = []
     for (chrom, transcript_id, strand), exons in groups.items():
-        exons.sort(key=lambda x: x[0])
+        exons.sort(key=lambda x: x[1])  # x[1] = start coordinate
         gene = exons[0][3] if exons else "."
 
         for i in range(len(exons) - 1):
