@@ -1,0 +1,8 @@
+*.tsv
+
+__pycache__
+
+.env
+.env.local
+
+*.pyc
