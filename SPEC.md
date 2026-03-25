@@ -361,7 +361,7 @@ class FusionWorkflow:
 ```bash
 # Full workflow (DB mode) - auto-discover files with default patterns
 fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 \
-  --mssql "Server=...;Database=..." \
+  --mssql "mssql+pyodbc://user:pass@server/database?driver=ODBC+Driver+17+for+SQL+Server" \
   --table-ariba ariba_fusions \
   --table-starfusion starfusion_fusions
 
