@@ -1,8 +1,20 @@
 # FusionSQL — Gene Fusion Analysis to Microsoft SQL Server
 
 **Project:** `starfusion_itd` monorepo  
-**Purpose:** Parse gene fusion callers (Ariba, StarFusion) → load into MSSQL, merge results, analyze concordance  
+**Purpose:** Parse gene fusion callers (Arriba, STARFusion+FusionInspector) → load into MSSQL, merge results, analyze concordance  
 **Testing Mode:** CSV output mirroring MSSQL schemas  
+
+## Input Sources
+
+### 1. Arriba Fusion Caller
+- **Tool:** Arriba (https://github.com/suhrig/arriba)
+- **Output:** `arriba_fusions.tsv` — gene fusion calls with splice sites, reading frame, coverage
+
+### 2. STARFusion + FusionInspector Pipeline
+- **Tool:** STAR-Fusion (https://github.com/STAR-Fusion/STAR-Fusion) + FusionInspector (https://github.com/FusionInspector/FusionInspector)
+- **Workflow:** STARFusion → candidate fusions → FusionInspector → validated fusions with deep annotation
+- **Output:** `fusion_inspector.fusions.tsv` — STARFusion results validated by FusionInspector
+- **Note:** STARFusion and FusionInspector are from the same tool suite; FusionInspector extends STARFusion analysis  
 
 ---
 
