@@ -198,14 +198,20 @@ starfusion_itd/
 
 ### 1. File Discovery (`discovery/`)
 
-#### `find_ariba_files(root_dir: Path, pattern: str = "*.tsv") -> List[Path]`
+#### `find_ariba_files(root_dir: Path, glob_pattern: str = "*.tsv", name_patterns: List[str] = None) -> List[Path]`
 - Recursively find Ariba fusion report files
-- Ariba files typically named: `ariba_report.tsv` or `ariba_*_report.tsv`
+- **glob_pattern:** File extension filter (default: `*.tsv`)
+- **name_patterns:** List of regex patterns for matching filenames
+  - Default: `ariba.*report\.tsv$`, `.*ariba_report\.tsv$`
+  - Custom: `["my_ariba_.*\\.tsv$", "run.*_ariba\\.tsv$"]`
 - Return list of Path objects
 
-#### `find_starfusion_files(root_dir: Path, pattern: str = "*.tsv") -> List[Path]`
+#### `find_starfusion_files(root_dir: Path, glob_pattern: str = "*.tsv", name_patterns: List[str] = None) -> List[Path]`
 - Recursively find StarFusion/FusionInspector output files
-- Files: `star-fusion.fusion_predictions.tsv`, `fusion_inspector.fusion_candidates.tsv`
+- **glob_pattern:** File extension filter (default: `*.tsv`)
+- **name_patterns:** List of regex patterns for matching filenames
+  - Default: `star.*fusion.*\.tsv$`, `fusion_inspector.*\.tsv$`
+  - Custom: `["starfusion_.*\\.tsv$", "fi_.*\\.tsv$"]`
 - Return list of Path objects
 
 #### `extract_sample_id(file_path: Path, pattern: str) -> Optional[str]`
@@ -213,8 +219,8 @@ starfusion_itd/
 - Common patterns: `Sample_([^/]+)`, `Run_([^/]+)`, etc.
 - Return sample ID string or None
 
-#### `scan_directory(root_dir: Path) -> Dict[str, Dict[str, Path]]`
-- Scan directory for all Ariba and StarFusion files
+#### `scan_directory(root_dir: Path, ariba_patterns: List[str] = None, starfusion_patterns: List[str] = None) -> Dict[str, Dict[str, Path]]`
+- Scan directory for all Ariba and StarFusion files using custom patterns
 - Group by sample ID
 - Return structure: `{sample_id: {ariba: Path, starfusion: Path}}`
 
@@ -353,11 +359,21 @@ class FusionWorkflow:
 ### 6. CLI (`cli.py`)
 
 ```bash
-# Full workflow (DB mode)
-fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 --mssql "Server=...;Database=..." --table-ariba ariba_fusions --table-starfusion starfusion_fusions
+# Full workflow (DB mode) - auto-discover files with default patterns
+fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 \
+  --mssql "Server=...;Database=..." \
+  --table-ariba ariba_fusions \
+  --table-starfusion starfusion_fusions
+
+# With custom file patterns
+fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 \
+  --ariba-patterns "my_ariba.*\\.tsv$" "ariba_.*report\\.tsv$" \
+  --starfusion-patterns "starfusion.*\\.tsv$" "fi_.*\\.tsv$" \
+  --mssql "Server=...;Database=..."
 
 # Test mode (TSV output)
-fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 --test-mode --output ./tsv_results
+fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 \
+  --test-mode --output ./tsv_results
 
 # Parse only
 fusql parse-ariba /path/to/ariba.tsv --run-id RUN001 --sample-id SAMPLE_001 --output ariba_parsed.tsv
@@ -365,6 +381,11 @@ fusql parse-starfusion /path/to/starfusion.tsv --run-id RUN001 --sample-id SAMPL
 
 # Concordance analysis
 fusql merge --ariba ariba.tsv --starfusion starfusion.tsv --run-id RUN001 --sample-id SAMPLE_001 --output merged.tsv
+
+# Discovery with patterns
+fusql discover /path/to/samples \
+  --ariba-patterns ".*ariba.*\\.tsv$" \
+  --starfusion-patterns ".*fusion.*\\.tsv$"
 
 # Discovery
 fusql discover /path/to/samples --output discovered_files.json
