@@ -6,16 +6,16 @@ from typing import List, Optional
 
 
 # Default file name patterns for each caller type
+# Arriba: arriba_report.tsv
 ARIBA_PATTERNS = [
-    re.compile(r"ariba[_-]?.*report\.tsv$", re.IGNORECASE),
-    re.compile(r".*ariba_report\.tsv$", re.IGNORECASE),
+    re.compile(r"^ariba_report\.tsv$", re.IGNORECASE),
+    re.compile(r"ariba.*report\.tsv$", re.IGNORECASE),
 ]
 
+# StarFusion: star-fusion.fusion_predictions.abridged.tsv
 STARFUSION_PATTERNS = [
-    re.compile(r"star[-_]?fusion.*\.tsv$", re.IGNORECASE),
-    re.compile(r"fusion_inspector.*\.tsv$", re.IGNORECASE),
-    re.compile(r"star-fusion\.fusion_predictions\.tsv$", re.IGNORECASE),
-    re.compile(r"fusion_inspector\.fusion_candidates\.tsv$", re.IGNORECASE),
+    re.compile(r"^star-fusion\.fusion_predictions.*\.tsv$", re.IGNORECASE),
+    re.compile(r"^fusion_inspector.*\.tsv$", re.IGNORECASE),
 ]
 
 
