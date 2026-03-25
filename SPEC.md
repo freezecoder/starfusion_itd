@@ -2,7 +2,7 @@
 
 **Project:** `starfusion_itd` monorepo  
 **Purpose:** Parse gene fusion callers (Arriba, STARFusion+FusionInspector) → load into MSSQL, merge results, analyze concordance  
-**Testing Mode:** CSV output mirroring MSSQL schemas  
+**Testing Mode:** TSV output mirroring MSSQL schemas  
 
 ## Input Sources
 
@@ -58,7 +58,7 @@
                     ┌─────────────────────┐
                     │   Output Formats    │
                     │  - MSSQL Tables    │
-                    │  - CSV (test mode) │
+                    │  - TSV (test mode) │
                     │  - JSON (summary)   │
                     └─────────────────────┘
 ```
@@ -85,7 +85,7 @@ starfusion_itd/
 │   │   ├── __init__.py
 │   │   ├── base.py             # Base loader class
 │   │   ├── mssql.py            # MSSQL bulk loader
-│   │   └── csv.py              # CSV loader (test mode)
+│   │   └── tsv.py              # TSV loader (test mode)
 │   │
 │   ├── concordance/             # Fusion concordance analysis
 │   │   ├── __init__.py
@@ -283,16 +283,16 @@ class MSSQLLoader:
 - Partition key: `run_id` + `sample_id`
 - Configurable table names per tool type (ariba_fusions, starfusion_fusions, fusion_concordance)
 
-#### CSV Loader (`csv.py`) — Test Mode
+#### TSV Loader (`tsv.py`) — Test Mode
 
 ```python
-class CSVLoader:
+class TSVLoader:
     def __init__(self, output_dir: Path):
         """Initialize with output directory"""
         
     def write(self, table_name: str, rows: List[Dict]) -> Path:
-        """Write rows to CSV matching MSSQL schema"""
-        # Output: output_dir/table_name.csv
+        """Write rows to TSV matching MSSQL schema"""
+        # Output: output_dir/table_name.tsv
 ```
 
 ### 4. Concordance (`concordance/`)
@@ -331,7 +331,7 @@ def generate_summary_report(merged: List[FusionConcordance], stats: Dict) -> str
 ```python
 class FusionWorkflow:
     def __init__(self, config: WorkflowConfig):
-        self.loader = CSVLoader(...) if config.test_mode else MSSQLLoader(...)
+        self.loader = TSVLoader(...) if config.test_mode else MSSQLLoader(...)
         
     def run(
         self,
@@ -344,7 +344,7 @@ class FusionWorkflow:
         1. Discover files
         2. Parse Ariba (if found)
         3. Parse StarFusion (if found)
-        4. Load to MSSQL/CSV
+        4. Load to MSSQL/TSV
         5. Merge and analyze concordance
         6. Return results
         """
@@ -356,15 +356,15 @@ class FusionWorkflow:
 # Full workflow (DB mode)
 fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 --mssql "Server=...;Database=..." --table-ariba ariba_fusions --table-starfusion starfusion_fusions
 
-# Test mode (CSV output)
-fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 --test-mode --output ./csv_results
+# Test mode (TSV output)
+fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 --test-mode --output ./tsv_results
 
 # Parse only
-fusql parse-ariba /path/to/ariba.tsv --run-id RUN001 --sample-id SAMPLE_001 --output ariba_parsed.csv
-fusql parse-starfusion /path/to/starfusion.tsv --run-id RUN001 --sample-id SAMPLE_001 --output starfusion_parsed.csv
+fusql parse-ariba /path/to/ariba.tsv --run-id RUN001 --sample-id SAMPLE_001 --output ariba_parsed.tsv
+fusql parse-starfusion /path/to/starfusion.tsv --run-id RUN001 --sample-id SAMPLE_001 --output starfusion_parsed.tsv
 
 # Concordance analysis
-fusql merge --ariba ariba.csv --starfusion starfusion.csv --run-id RUN001 --sample-id SAMPLE_001 --output merged.csv
+fusql merge --ariba ariba.tsv --starfusion starfusion.tsv --run-id RUN001 --sample-id SAMPLE_001 --output merged.tsv
 
 # Discovery
 fusql discover /path/to/samples --output discovered_files.json
@@ -402,7 +402,7 @@ class WorkflowConfig:
 1. **Package Setup** — Create `fusql/` package structure, `pyproject.toml`, `__init__.py` files
 2. **Ariba Parser** — Implement `parsers/ariba.py` with exon/splice site extraction
 3. **StarFusion Parser** — Implement `parsers/starfusion.py` 
-4. **MSSQL/CSV Loader** — Implement `loaders/mssql.py` and `loaders/csv.py`
+4. **MSSQL/TSV Loader** — Implement `loaders/mssql.py` and `loaders/tsv.py`
 5. **File Discovery** — Implement `discovery/finder.py` and `scanner.py`
 6. **Concordance Merger** — Implement `concordance/merger.py` and `analyzer.py`
 7. **Workflow & CLI** — Implement `workflow/runner.py` and `cli.py`
