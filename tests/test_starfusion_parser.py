@@ -19,9 +19,13 @@ class TestStarFusionParser:
         """Parser extracts the FusionName field correctly."""
         parser = StarFusionParser()
         fusions = parser.parse(sample_starfusion_path)
-        # All rows in fixture are FIP1L1--PDGFRA
-        for fusion in fusions:
-            assert fusion.fusion_name == "FIP1L1--PDGFRA"
+        # The first row in the fixture is FIP1L1--PDGFRA
+        assert len(fusions) > 0
+        assert fusions[0].fusion_name == "FIP1L1--PDGFRA"
+        # Spot-check that multiple fusion types are present in the fixture
+        fusion_names = {f.fusion_name for f in fusions}
+        assert "FIP1L1--PDGFRA" in fusion_names
+        assert "TCF3--PBX1" in fusion_names  # also present in fixture
 
     def test_parse_extracts_gene_symbols(self, sample_starfusion_path):
         """Parser strips ENSG suffix from gene fields."""

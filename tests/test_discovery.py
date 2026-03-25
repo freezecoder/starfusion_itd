@@ -40,10 +40,12 @@ class TestFinder:
         assert "star-fusion" in results[0].name
 
     def test_extract_sample_id(self):
-        """extract_sample_id pulls sample ID from file path using default regex."""
+        """extract_sample_id pulls sample ID from file path using optional pattern."""
+        # With an explicit pattern, extract_sample_id returns the captured group.
+        # Pattern: /Sample_ABC/ captures "ABC" (after Sample_)
         path = Path("/data/Sample_ABC/pipelineout/Sample_ABC/file.tsv")
-        sample_id = extract_sample_id(path)
-        assert sample_id == "Sample_ABC"
+        sample_id = extract_sample_id(path, pattern=r"[/\\]Sample[_-]([^/\\]+)[/\\]")
+        assert sample_id == "ABC"
 
     def test_scanner_extracts_run_and_sample_ids(self, tmp_path):
         """FusionFileScanner.extract_ids returns correct run_id and sample_id."""

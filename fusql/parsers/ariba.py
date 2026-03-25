@@ -85,8 +85,13 @@ class AribaParser:
             ParserError: If file cannot be read or parsed
         """
         try:
-            # Arriba files have header starting with #
-            df = pd.read_csv(file_path, sep="\t", comment="#", header=0)
+            # Arriba files have header starting with # (e.g. "#gene1")
+            # Don't use comment="#" — that would skip the header row entirely.
+            # Instead read normally and strip the leading '#' from the first column name.
+            df = pd.read_csv(file_path, sep="\t", header=0)
+            # Strip '#' prefix from the gene1 column if present
+            if df.columns[0] == "#gene1":
+                df.columns = df.columns.str.lstrip("#")
         except Exception as e:
             raise ParserError(f"Failed to read Arriba file {file_path}: {e}")
         
