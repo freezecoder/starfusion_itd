@@ -1,0 +1,22 @@
+[project]
+name = "fusql"
+version = "0.1.0"
+description = "Gene Fusion Analysis to Microsoft SQL Server"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0.0",
+    "pyodbc>=5.0.0",
+    "click>=8.0.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0.0",
+    "loguru>=0.7.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+fusql = "fusql.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
