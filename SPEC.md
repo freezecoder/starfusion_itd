@@ -468,6 +468,21 @@ fusql discover /path/to/samples \
 
 # Discovery
 fusql discover /path/to/samples --output discovered_files.json
+
+# Sync (incremental) - process only new samples not already in DB
+fusql sync /path/to/runs \
+  --watch-table ariba_fusions \
+  --mssql "mssql+pyodbc://user:pass@server/database?driver=ODBC+Driver+17+for+SQL+Server"
+
+# Sync with schedule (adds to cron)
+fusql sync /path/to/runs \
+  --watch-table ariba_fusions \
+  --schedule daily
+
+# Sync with custom cron
+fusql sync /path/to/runs \
+  --watch-table ariba_fusions \
+  --cron "0 2 * * *"
 ```
 
 ---

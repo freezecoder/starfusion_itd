@@ -379,6 +379,62 @@ echo "$SAMPLES" | xargs -P 4 -I {} fusql run /data/Z3AT9 \
 
 ---
 
+## `fusql sync`
+
+Incremental sync — process only new samples not already in DB.
+
+```bash
+fusql sync [OPTIONS] WATCH_DIR
+```
+
+**Description:**
+1. Query database for existing `(run_id, sample_id)` pairs
+2. Scan watch directory for new samples
+3. Process only samples not already loaded
+4. Load to MSSQL
+
+**Options:**
+| Option | Description | Required |
+|--------|-------------|----------|
+| `--watch-table` | DB table to check for existing samples | Yes |
+| `--mssql` | MSSQL connection string | Yes (if not using config) |
+| `--schedule` | Schedule: `daily`, `hourly`, or custom cron | No |
+| `--cron` | Custom cron expression (e.g., `0 2 * * *`) | No |
+
+**Examples:**
+
+```bash
+# Single sync run
+fusql sync /data/runs \
+  --watch-table ariba_fusions \
+  --mssql "mssql+pyodbc://user:pass@server/db?driver=ODBC+Driver+17+for+SQL+Server"
+
+# With config file
+fusql sync /data/runs --watch-table ariba_fusions
+
+# Daily schedule (adds to cron)
+fusql sync /data/runs --watch-table ariba_fusions --schedule daily
+
+# Custom cron (every day at 2 AM)
+fusql sync /data/runs --watch-table ariba_fusions --cron "0 2 * * *"
+
+# Hourly sync
+fusql sync /data/runs --watch-table ariba_fusions --schedule hourly
+```
+
+**Output:**
+```
+[INFO] Found 10 samples in database
+[INFO] Discovered 15 samples in /data/runs
+[INFO] 5 new samples to process
+[INFO] Processing: Z3AT9/Z3AT9_IonCode_0125
+[INFO] Processing: Z3AT9/Z3AT9_IonCode_0126
+...
+[INFO] Loaded 5 new samples in 45.2s
+```
+
+---
+
 ## Help
 
 For full help:
