@@ -150,3 +150,108 @@ print(config.mssql.connection_string)
 print(config.table_ariba)
 print(config.ariba_patterns)
 ```
+
+## Database Behavior
+
+### Append-Only Mode
+
+**FusionSQL always operates in append-only mode for MSSQL.** This means:
+
+- ✅ **INSERT only** — never UPDATE, DELETE, or MERGE
+- ✅ **Idempotent runs** — re-processing same sample adds new rows (does not overwrite)
+- ✅ **Data preserved** — existing data is never modified or deleted
+- ✅ **Partitioned by run_id + sample_id** — each run's data is independently identifiable
+
+This ensures safe operation in production environments where data integrity is critical.
+
+### Example: Re-running a Sample
+
+If you re-run the same sample:
+
+```bash
+# First run
+fusql run /data --run-id RUN1 --sample-id SAMPLE1 --mssql "..."
+
+# Second run (same sample)
+fusql run /data --run-id RUN1 --sample-id SAMPLE1 --mssql "..."
+```
+
+Both runs insert independently. You will have duplicate rows with different `id` values. Query by `run_id` to distinguish them.
+
+## Output Formats
+
+### TSV Output (Test Mode)
+
+Default format. Tab-separated values matching the MSSQL schema exactly.
+
+```bash
+fusql parse-ariba input.tsv --run-id RUN1 --sample-id S1 -o output.tsv
+```
+
+### Excel Output
+
+For Excel (.xlsx) output, specify the file extension:
+
+```bash
+fusql parse-ariba input.tsv --run-id RUN1 --sample-id S1 -o output.xlsx
+fusql parse-starfusion input.tsv --run-id RUN1 --sample-id S1 -o output.xlsx
+```
+
+Excel files include:
+- Formatted headers (blue background, white bold text)
+- Auto-adjusted column widths
+- All data preserved in a spreadsheet-friendly format
+
+## Output Templates
+
+You can customize which fields appear in output files using `output_templates` in the config:
+
+```yaml
+output_templates:
+  ariba:
+    fields:
+      - run_id
+      - sample_id
+      - gene1
+      - gene2
+      - exon1
+      - exon2
+      - reads
+  starfusion:
+    fields:
+      - run_id
+      - sample_id
+      - gene1
+      - gene2
+      - junction_reads
+      - spanning_reads
+  concordance:
+    fields:
+      - run_id
+      - sample_id
+      - fusion_id
+      - concordance_status
+```
+
+When `fields` is empty or omitted, all fields are included.
+
+Use `--all-fields` flag to override and include all fields regardless of template.
+
+## Loading Credentials from Python
+
+For sensitive credentials, you can load the MSSQL connection string from a Python file:
+
+```bash
+# creds.py
+def get_url():
+    return "mssql+pyodbc://user:pass@server/db?driver=ODBC+Driver+17+for+SQL+Server"
+```
+
+```bash
+fusql testdb --creds /path/to/creds.py
+fusql run /data --run-id RUN1 --sample-id S1 --creds /path/to/creds.py
+```
+
+Supports:
+- Function: `get_url()`, `get_connection_string()`
+- Variable: `URL`, `url`, `CONNECTION_STRING`

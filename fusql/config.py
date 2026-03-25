@@ -10,11 +10,12 @@ Settings:
 - Default table names
 - File patterns
 - Log level
+- Output templates (field selection)
 """
 
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import os
 import yaml
 
@@ -23,6 +24,93 @@ import yaml
 class MSSQLConfig:
     connection_string: Optional[str] = None
     driver: str = "ODBC Driver 17 for SQL Server"
+
+
+@dataclass
+class OutputTemplate:
+    """Template for customizing output fields."""
+    include: bool = True  # Whether to include this output
+    fields: List[str] = None  # List of field names to include (None = all fields)
+    
+    def __post_init__(self):
+        if self.fields is None:
+            self.fields = []
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "include": self.include,
+            "fields": self.fields if self.fields else [],
+        }
+    
+    @classmethod
+    def from_dict(cls, d: Dict) -> "OutputTemplate":
+        if d is None:
+            return cls()
+        return cls(
+            include=d.get("include", True),
+            fields=d.get("fields", []),
+        )
+
+
+@dataclass
+class OutputTemplates:
+    """Collection of output templates for each output type."""
+    ariba: OutputTemplate = field(default_factory=OutputTemplate)
+    starfusion: OutputTemplate = field(default_factory=OutputTemplate)
+    concordance: OutputTemplate = field(default_factory=OutputTemplate)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "ariba": self.ariba.to_dict(),
+            "starfusion": self.starfusion.to_dict(),
+            "concordance": self.concordance.to_dict(),
+        }
+    
+    @classmethod
+    def from_dict(cls, d: Dict) -> "OutputTemplates":
+        if d is None:
+            return cls()
+        return cls(
+            ariba=OutputTemplate.from_dict(d.get("ariba", {})),
+            starfusion=OutputTemplate.from_dict(d.get("starfusion", {})),
+            concordance=OutputTemplate.from_dict(d.get("concordance", {})),
+        )
+    
+    def filter_fields(self, output_type: str, all_fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Filter fields based on template.
+        
+        Args:
+            output_type: 'ariba', 'starfusion', or 'concordance'
+            all_fields: Dict of all field values
+            
+        Returns:
+            Dict with only the selected fields (or all if no template specified)
+        """
+        template = getattr(self, output_type, None)
+        if template is None or not template.fields:
+            return all_fields
+        
+        return {k: v for k, v in all_fields.items() if k in template.fields}
+
+
+# Default templates - show most useful fields
+DEFAULT_ARIBA_FIELDS = [
+    "run_id", "sample_id", "fusion_id", "gene1", "gene2",
+    "exon1", "exon2", "splice_site_1", "splice_site_2",
+    "reads", "coding", "reading_frame", "confidence"
+]
+
+DEFAULT_STARFUSION_FIELDS = [
+    "run_id", "sample_id", "fusion_name", "gene1", "gene2",
+    "exon1", "exon2", "splice_type", "junction_reads",
+    "spanning_reads", "ffpm", "prot_fusion_type"
+]
+
+DEFAULT_CONCORDANCE_FIELDS = [
+    "run_id", "sample_id", "fusion_id", "gene1", "gene2",
+    "ariba_found", "starfusion_found", "concordance_status",
+    "splice_concordant"
+]
 
 
 @dataclass
@@ -41,6 +129,7 @@ class FusionSQLConfig:
         ]
     )
     log_level: str = "INFO"
+    output_templates: OutputTemplates = field(default_factory=OutputTemplates)
 
     def to_dict(self) -> dict:
         """Convert config to a plain dict suitable for YAML serialization."""
@@ -52,6 +141,7 @@ class FusionSQLConfig:
             "ariba_patterns": self.ariba_patterns,
             "starfusion_patterns": self.starfusion_patterns,
             "log_level": self.log_level,
+            "output_templates": self.output_templates.to_dict(),
         }
 
     @classmethod
@@ -75,22 +165,12 @@ class FusionSQLConfig:
                 ],
             ),
             log_level=d.get("log_level", "INFO"),
+            output_templates=OutputTemplates.from_dict(d.get("output_templates", {})),
         )
 
 
 def _env_overrides(config: FusionSQLConfig) -> FusionSQLConfig:
-    """Apply environment variable overrides to config.
-
-    Environment variables (all prefixed with FUSQL_):
-    - FUSQL_MSSQL: MSSQL connection string
-    - FUSQL_DRIVER: ODBC driver name
-    - FUSQL_TABLE_ARIBA: Ariba table name
-    - FUSQL_TABLE_STARFUSION: STARFusion table name
-    - FUSQL_TABLE_CONCORDANCE: Concordance table name
-    - FUSQL_ARIBA_PATTERNS: JSON-encoded list of Ariba file patterns
-    - FUSQL_STARFUSION_PATTERNS: JSON-encoded list of STARFusion file patterns
-    - FUSQL_LOG_LEVEL: Logging level
-    """
+    """Apply environment variable overrides to config."""
     import json
 
     if os.environ.get("FUSQL_MSSQL"):
@@ -115,24 +195,9 @@ def _env_overrides(config: FusionSQLConfig) -> FusionSQLConfig:
 
 
 def load_config(config_path: Optional[Path] = None) -> FusionSQLConfig:
-    """Load config from env vars and config files.
-
-    Priority (highest to lowest):
-    1. Environment variables (FUSQL_*)
-    2. Explicit config_path argument
-    3. ./fusql.yaml (current directory)
-    4. ~/.fusql.yaml (home directory)
-
-    Args:
-        config_path: Explicit path to a YAML config file. If provided, skips
-                     the default search paths.
-
-    Returns:
-        FusionSQLConfig with all settings resolved.
-    """
+    """Load config from env vars and config files."""
     config = FusionSQLConfig()
 
-    # Search for config file if not explicitly provided
     search_paths: List[Path] = []
     if config_path is None:
         search_paths = [Path.cwd() / "fusql.yaml", Path.home() / ".fusql.yaml"]
@@ -147,19 +212,12 @@ def load_config(config_path: Optional[Path] = None) -> FusionSQLConfig:
                 config = FusionSQLConfig.from_dict(data)
             break
 
-    # Environment variables always win
     config = _env_overrides(config)
-
     return config
 
 
 def save_config(config: FusionSQLConfig, path: Path) -> None:
-    """Save config to a YAML file.
-
-    Args:
-        config: FusionSQLConfig to serialize.
-        path: Destination file path.
-    """
+    """Save config to a YAML file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
