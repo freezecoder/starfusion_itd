@@ -68,14 +68,14 @@ fusql run /path/to/samples \
   --table-starfusion starfusion_fusions
 ```
 
-### Test Mode (CSV)
+### Test Mode (TSV)
 
 ```bash
 fusql run /path/to/samples \
   --run-id RUN001 \
   --sample-id SAMPLE_001 \
   --test-mode \
-  --output ./csv_results
+  --output ./tsv_results
 ```
 
 ### Individual Steps
@@ -88,7 +88,7 @@ fusql parse-ariba input.tsv --run-id RUN001 --sample-id SAMPLE_001
 fusql parse-starfusion input.tsv --run-id RUN001 --sample-id SAMPLE_001
 
 # Merge & Analyze Concordance
-fusql merge --ariba ariba.csv --starfusion starfusion.csv --output merged.csv
+fusql merge --ariba ariba.tsv --starfusion starfusion.tsv --output merged.tsv
 ```
 
 ---
@@ -118,7 +118,7 @@ starfusion_itd/
 ├── fusql/                      # Python package
 │   ├── parsers/               # Arriba, STARFusion parsers
 │   ├── discovery/             # File finder, scanner
-│   ├── loaders/               # MSSQL, CSV loaders
+│   ├── loaders/               # MSSQL, TSV loaders
 │   ├── concordance/           # Merger, analyzer
 │   └── cli.py                 # Command-line interface
 │
@@ -148,7 +148,7 @@ starfusion_itd/
 - ✅ Arriba parser (tested with real data)
 - ✅ STARFusion parser (tested with real data)
 - ✅ File discovery
-- ✅ CSV loader (test mode)
+- ✅ TSV loader (test mode)
 - ⏳ MSSQL loader
 - ⏳ Concordance analyzer
 - ⏳ CLI + workflow runner
