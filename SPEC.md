@@ -372,20 +372,83 @@ class FusionWorkflow:
         """
 ```
 
+### 5.1 Incremental Loading (`workflow/incremental.py`)
+
+```python
+class IncrementalLoader:
+    """Check DB for existing samples, only process new ones."""
+    
+    def get_existing_samples(self, table: str) -> Set[Tuple[str, str]]:
+        """Get set of (run_id, sample_id) already in DB.
+        
+        Returns:
+            Set of tuples: {(run_id, sample_id), ...}
+        """
+        
+    def find_new_samples(self, discovered: Dict) -> Dict:
+        """Filter discovered samples, returning only new ones.
+        
+        Args:
+            discovered: Output from FusionFileScanner.scan_directory()
+            
+        Returns:
+            Filtered dict with only new (not in DB) samples
+        """
+        
+    def run_incremental(
+        self,
+        root_dir: Path,
+        table: str = "ariba_fusions"
+    ) -> IncrementalResult:
+        """
+        Main incremental workflow:
+        1. Query DB for existing (run_id, sample_id) pairs
+        2. Discover files in root_dir
+        3. Filter out already-loaded samples
+        4. Process only new samples
+        5. Return summary of what was loaded
+        """
+```
+
+### 5.2 Daily Cron Job
+
+```bash
+# Run daily to process new samples from a watch folder
+fusql sync /path/to/runs \
+  --watch-table ariba_fusions \
+  --mssql "mssql+pyodbc://..." \
+  --schedule daily
+```
+
+**Schedule options:**
+- `--schedule daily` — run once per day at midnight
+- `--schedule hourly` — run every hour
+- `--cron "0 2 * * *"` — custom cron expression
+
+**Behavior:**
+1. Query DB for `(run_id, sample_id)` pairs already loaded
+2. Scan watch directory for new samples
+3. Process only new samples (not already in DB)
+4. Load to MSSQL
+5. Log results and any errors
+6. Send summary notification (optional)
+
+
 ### 6. CLI (`cli.py`)
 
 ```bash
-# Full workflow (DB mode) - auto-discover files with default patterns
+# Full workflow (DB mode) - auto-discovers files with patterns from config
 fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 \
-  --mssql "mssql+pyodbc://user:pass@server/database?driver=ODBC+Driver+17+for+SQL+Server" \
-  --table-ariba ariba_fusions \
-  --table-starfusion starfusion_fusions
+  --mssql "mssql+pyodbc://user:pass@server/database?driver=ODBC+Driver+17+for+SQL+Server"
 
-# With custom file patterns
-fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 \
-  --ariba-patterns "my_ariba.*\\.tsv$" "ariba_.*report\\.tsv$" \
-  --starfusion-patterns "starfusion.*\\.tsv$" "fi_.*\\.tsv$" \
-  --mssql "Server=...;Database=..."
+# Use a specific config file
+fusql --config /path/to/fusql.yaml run /path/to/samples
+
+# Override log level via CLI (overrides config)
+fusql --log-level DEBUG run /path/to/samples
+
+# Show current configuration
+fusql --show-config
 
 # Test mode (TSV output)
 fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 \
@@ -411,25 +474,74 @@ fusql discover /path/to/samples --output discovered_files.json
 
 ## Configuration (`config.py`)
 
+FusionSQL uses a layered configuration system with priority (highest to lowest):
+
+1. **CLI arguments** — `--log-level`, `--config`, etc.
+2. **Environment variables** — `FUSQL_*` prefixed vars
+3. **Config file** — `./fusql.yaml` then `~/.fusql.yaml`
+4. **Defaults** — Built-in defaults for all settings
+
+### Config File Format (`fusql.yaml`)
+
+```yaml
+mssql:
+  connection_string: "mssql+pyodbc://user:pass@server/db?driver=ODBC+Driver+17+for+SQL+Server"
+  driver: "ODBC Driver 17 for SQL Server"
+table_ariba: ariba_fusions
+table_starfusion: starfusion_fusions
+table_concordance: fusion_concordance
+ariba_patterns:
+  - "^ariba_report\\.tsv$"
+  - "ariba.*report\\.tsv$"
+starfusion_patterns:
+  - "^star-fusion\\.fusion_predictions.*\\.tsv$"
+  - "^fusion_inspector.*\\.tsv$"
+log_level: INFO
+```
+
+### Environment Variables
+
+All `FUSQL_*` variables override config file and defaults:
+
+| Variable | Description |
+|----------|-------------|
+| `FUSQL_MSSQL` | MSSQL connection string |
+| `FUSQL_DRIVER` | ODBC driver name |
+| `FUSQL_TABLE_ARIBA` | Ariba table name |
+| `FUSQL_TABLE_STARFUSION` | STARFusion table name |
+| `FUSQL_TABLE_CONCORDANCE` | Concordance table name |
+| `FUSQL_ARIBA_PATTERNS` | JSON-encoded list of Ariba patterns |
+| `FUSQL_STARFUSION_PATTERNS` | JSON-encoded list of STARFusion patterns |
+| `FUSQL_LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+
+### CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `--config PATH` | Path to config file |
+| `--log-level LEVEL` | Logging level (overrides config) |
+| `--show-config` | Display current config and exit |
+
+### Config Classes
+
 ```python
 @dataclass
 class MSSQLConfig:
-    server: str
-    database: str
-    username: str
-    password: str
+    connection_string: Optional[str] = None
     driver: str = "ODBC Driver 17 for SQL Server"
-    
-@dataclass  
-class WorkflowConfig:
-    test_mode: bool = False
-    output_dir: Optional[Path] = None
-    mssql: Optional[MSSQLConfig] = None
+
+@dataclass
+class FusionSQLConfig:
+    mssql: MSSQLConfig = field(default_factory=MSSQLConfig)
+    table_ariba: str = "ariba_fusions"
+    table_starfusion: str = "starfusion_fusions"
+    table_concordance: str = "fusion_concordance"
+    ariba_patterns: List[str] = field(default_factory=lambda: [...])
+    starfusion_patterns: List[str] = field(default_factory=lambda: [...])
     log_level: str = "INFO"
-    sample_id_pattern: str = r"([A-Za-z0-9_-]+)"
-    
-# Load from config file or environment variables
-# Config file: fusql.yaml or fusql.json
+
+def load_config(config_path: Optional[Path] = None) -> FusionSQLConfig: ...
+def save_config(config: FusionSQLConfig, path: Path) -> None: ...
 ```
 
 ---
