@@ -136,6 +136,7 @@ starfusion_itd/
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | BIGINT IDENTITY | Primary key |
+| `run_id` | VARCHAR(100) | Sequencer run identifier |
 | `sample_id` | VARCHAR(100) | Sample identifier |
 | `fusion_id` | VARCHAR(200) | Unique fusion identifier |
 | `gene1` | VARCHAR(50) | Left gene symbol |
@@ -155,6 +156,7 @@ starfusion_itd/
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | BIGINT IDENTITY | Primary key |
+| `run_id` | VARCHAR(100) | Sequencer run identifier |
 | `sample_id` | VARCHAR(100) | Sample identifier |
 | `fusion_name` | VARCHAR(300) | Fusion display name |
 | `gene1` | VARCHAR(50) | Left gene symbol |
@@ -176,6 +178,7 @@ starfusion_itd/
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | BIGINT IDENTITY | Primary key |
+| `run_id` | VARCHAR(100) | Sequencer run identifier |
 | `sample_id` | VARCHAR(100) | Sample identifier |
 | `fusion_id` | VARCHAR(300) | Normalized fusion ID |
 | `gene1` | VARCHAR(50) | Left gene |
@@ -258,7 +261,7 @@ class StarFusionParser:
 
 ### 3. Loaders (`loaders/`)
 
-#### MSSQL Loader (`mssql.py`)
+#### MSSQL Loader (`mssql.py`) — Production Mode
 
 ```python
 class MSSQLLoader:
@@ -266,10 +269,7 @@ class MSSQLLoader:
         """Initialize with MSSQL connection string"""
         
     def bulk_insert(self, table: str, rows: List[Dict]) -> int:
-        """Bulk insert using BULK INSERT or batch INSERT"""
-        
-    def upsert(self, table: str, rows: List[Dict], key_columns: List[str]) -> int:
-        """Insert or update on conflict"""
+        """Append rows to table (partitioned by run_id + sample_id)"""
         
     def table_exists(self, table: str) -> bool:
         """Check if table exists"""
@@ -277,6 +277,11 @@ class MSSQLLoader:
     def create_table(self, table: str, schema: Dict[str, str]) -> None:
         """Create table if not exists"""
 ```
+
+**Design:**
+- Append-only mode (no upsert)
+- Partition key: `run_id` + `sample_id`
+- Configurable table names per tool type (ariba_fusions, starfusion_fusions, fusion_concordance)
 
 #### CSV Loader (`csv.py`) — Test Mode
 
@@ -348,18 +353,18 @@ class FusionWorkflow:
 ### 6. CLI (`cli.py`)
 
 ```bash
-# Full workflow
-fusql run /path/to/samples --sample-id SAMPLE_001 --output ./results
+# Full workflow (DB mode)
+fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 --mssql "Server=...;Database=..." --table-ariba ariba_fusions --table-starfusion starfusion_fusions
 
 # Test mode (CSV output)
-fusql run /path/to/samples --sample-id SAMPLE_001 --test-mode --output ./csv_results
+fusql run /path/to/samples --run-id RUN001 --sample-id SAMPLE_001 --test-mode --output ./csv_results
 
 # Parse only
-fusql parse-ariba /path/to/ariba.tsv --output ariba_parsed.csv
-fusql parse-starfusion /path/to/starfusion.tsv --output starfusion_parsed.csv
+fusql parse-ariba /path/to/ariba.tsv --run-id RUN001 --sample-id SAMPLE_001 --output ariba_parsed.csv
+fusql parse-starfusion /path/to/starfusion.tsv --run-id RUN001 --sample-id SAMPLE_001 --output starfusion_parsed.csv
 
 # Concordance analysis
-fusql merge --ariba ariba.csv --starfusion starfusion.csv --output merged.csv
+fusql merge --ariba ariba.csv --starfusion starfusion.csv --run-id RUN001 --sample-id SAMPLE_001 --output merged.csv
 
 # Discovery
 fusql discover /path/to/samples --output discovered_files.json
