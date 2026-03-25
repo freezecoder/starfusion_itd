@@ -29,38 +29,52 @@ def is_starfusion_file(filename: str) -> bool:
     return any(p.match(filename) for p in STARFUSION_PATTERNS)
 
 
-def find_ariba_files(root_dir: Path, pattern: str = "*.tsv") -> List[Path]:
+def find_ariba_files(
+    root_dir: Path, 
+    glob_pattern: str = "*.tsv",
+    name_patterns: List[str] = None
+) -> List[Path]:
     """
     Recursively find Ariba fusion report files.
     
     Args:
         root_dir: Root directory to search
-        pattern: Glob pattern for file matching (default: "*.tsv")
+        glob_pattern: Glob pattern for file matching (default: "*.tsv")
+        name_patterns: List of regex patterns for matching filenames
         
     Returns:
         List of Path objects pointing to Ariba files
     """
+    patterns = [re.compile(p) for p in (name_patterns or [])] or ARIBA_PATTERNS
+    
     ariba_files = []
-    for path in root_dir.rglob(pattern):
-        if path.is_file() and is_ariba_file(path.name):
+    for path in root_dir.rglob(glob_pattern):
+        if path.is_file() and any(p.match(path.name) for p in patterns):
             ariba_files.append(path)
     return sorted(ariba_files)
 
 
-def find_starfusion_files(root_dir: Path, pattern: str = "*.tsv") -> List[Path]:
+def find_starfusion_files(
+    root_dir: Path, 
+    glob_pattern: str = "*.tsv",
+    name_patterns: List[str] = None
+) -> List[Path]:
     """
     Recursively find StarFusion/FusionInspector output files.
     
     Args:
         root_dir: Root directory to search
-        pattern: Glob pattern for file matching (default: "*.tsv")
+        glob_pattern: Glob pattern for file matching (default: "*.tsv")
+        name_patterns: List of regex patterns for matching filenames
         
     Returns:
         List of Path objects pointing to StarFusion files
     """
+    patterns = [re.compile(p) for p in (name_patterns or [])] or STARFUSION_PATTERNS
+    
     starfusion_files = []
-    for path in root_dir.rglob(pattern):
-        if path.is_file() and is_starfusion_file(path.name):
+    for path in root_dir.rglob(glob_pattern):
+        if path.is_file() and any(p.match(path.name) for p in patterns):
             starfusion_files.append(path)
     return sorted(starfusion_files)
 

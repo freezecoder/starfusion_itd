@@ -6,15 +6,31 @@
 
 ## Input Sources
 
+### Directory Structure
+```
+{run_id}/pipelineout/{sample_id}/{fusion_file}
+```
+
+Example:
+```
+Z3AT9/pipelineout/Z3AT9_IonCode_0125/star-fusion.fusion_predictions.abridged.tsv
+Z3AT9/pipelineout/Z3AT9_IonCode_0125/ariba_report.tsv
+```
+
+Where:
+- **run_id** = top-level folder (e.g., `Z3AT9`)
+- **sample_id** = subfolder (e.g., `Z3AT9_IonCode_0125`)
+- **fusion_file** = tool-specific output file
+
 ### 1. Arriba Fusion Caller
 - **Tool:** Arriba (https://github.com/suhrig/arriba)
-- **Output:** `arriba_fusions.tsv` — gene fusion calls with splice sites, reading frame, coverage
+- **Output:** `ariba_report.tsv` — gene fusion calls with splice sites, reading frame, coverage
 
 ### 2. STARFusion + FusionInspector Pipeline
 - **Tool:** STAR-Fusion (https://github.com/STAR-Fusion/STAR-Fusion) + FusionInspector (https://github.com/FusionInspector/FusionInspector)
 - **Workflow:** STARFusion → candidate fusions → FusionInspector → validated fusions with deep annotation
-- **Output:** `fusion_inspector.fusions.tsv` — STARFusion results validated by FusionInspector
-- **Note:** STARFusion and FusionInspector are from the same tool suite; FusionInspector extends STARFusion analysis  
+- **Output:** `star-fusion.fusion_predictions.abridged.tsv` — STARFusion results validated by FusionInspector
+- **Note:** STARFusion and FusionInspector are from the same tool suite; FusionInspector extends STARFusion analysis
 
 ---
 
