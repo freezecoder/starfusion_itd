@@ -1,0 +1,10 @@
+mssql:
+  connection_string: "mssql+pyodbc://user:pass@server/db?driver=ODBC+Driver+17+for+SQL+Server"
+table_ariba: ariba_fusions
+table_starfusion: starfusion_fusions
+table_concordance: fusion_concordance
+ariba_patterns:
+  - "^ariba_report\\.tsv$"
+starfusion_patterns:
+  - "^star-fusion\\.fusion_predictions.*\\.tsv$"
+log_level: INFO
